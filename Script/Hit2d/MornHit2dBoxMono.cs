@@ -8,7 +8,10 @@ namespace MornLib.Hit2d
 
         protected override int OverlapImpl(Collider2D[] results, LayerMask layerMask)
         {
-            return Physics2D.OverlapBoxNonAlloc(transform.position, _size, transform.eulerAngles.z, results, layerMask);
+            var filter = new ContactFilter2D();
+            filter.SetLayerMask(layerMask);
+            filter.useTriggers = true;
+            return Physics2D.OverlapBox(transform.position, _size, transform.eulerAngles.z, filter, results);
         }
 
         protected override void DrawGizmosImpl()
