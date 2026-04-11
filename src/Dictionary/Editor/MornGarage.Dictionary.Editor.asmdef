@@ -1,0 +1,19 @@
+{
+    "name": "MornGarage.Dictionary.Editor",
+    "rootNamespace": "MornLib",
+    "references": [
+        "MornGarage.Dictionary",
+        "MornUtil"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

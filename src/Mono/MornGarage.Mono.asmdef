@@ -1,0 +1,25 @@
+{
+    "name": "MornGarage.Mono",
+    "rootNamespace": "MornLib",
+    "references": [
+        "GUID:6055be8ebefd69e48b49212b09b47b2f",
+        "GUID:560b04d1a97f54a4e82edc0cbbb69285",
+        "GUID:75469ad4d38634e559750d17036d5f7c",
+        "MornUtil"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [
+        {
+            "name": "com.unity.textmeshpro",
+            "expression": "",
+            "define": "USE_TEXTMESHPRO"
+        }
+    ],
+    "noEngineReferences": false
+}

@@ -1,0 +1,17 @@
+{
+  "name": "com.tsukumistudio.morngarage",
+  "version": "1.0.0",
+  "displayName": "MornGarage",
+  "description": "使用頻度の低い小粒のユーティリティをまとめた物置きライブラリ。Singleton / Math / FPS / Pools / Hit2d / Physics2d / PopUps / Grids / StateMachine / SwordTrail などを 16 個の細粒度 asmdef で提供。",
+  "unity": "6000.0",
+  "license": "Unlicense",
+  "author": {
+    "name": "TsukumiStudio"
+  },
+  "keywords": [
+    "utility",
+    "kitchen-sink",
+    "garage",
+    "miscellaneous"
+  ]
+}
