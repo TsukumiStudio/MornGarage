@@ -27,16 +27,15 @@ namespace MornLib
             { "394ac4c5f3df4673862c62fc0563a7fb", ("25ce3e5de7204deabd088884851df9a5", "ObsoletePlayAnimationProcess", "PlayAnimationProcess") },
         };
 
-        // ========== フィールドリネーム (GUID リマップ後に適用) ==========
-        // ObsoleteSubState → SubState: _instantiate==0 のとき _prefab の値を _instance に移す
+        // ========== フィールドリネーム ==========
         private static readonly string SubStateNewGuid = "aac67bf328824705a55354ac6d26608c";
+        private static readonly string LinkModuleGuid = "8be286109e114b849574ebd8390b6191";
 
         // ========== 削除された GUID (対応先なし) ==========
         private static readonly Dictionary<string, string> DeletedGuids = new()
         {
             { "e830bade52d747819e91153be1b80223", "MornUGUIButtonModuleBase (削除)" },
             { "e31b2f6049aa48499baee31c0cea8064", "MornUGUISliderModuleBase (削除)" },
-            { "8be286109e114b849574ebd8390b6191", "MornUGUIButtonModule Arbor (削除)" },
         };
 
         // ========== C# 置換テーブル ==========
@@ -215,13 +214,23 @@ namespace MornLib
                             }
                         }
 
-                        // SubState フィールド不整合検出 (新GUID済みだが _prefab/_instance 不一致)
+                        // SubState フィールド不整合検出
                         if (content.Contains(SubStateNewGuid) && HasSubStateFieldMismatch(content))
                         {
                             _fieldFixResults.Add(new ScanResult
                             {
                                 AssetPath = path,
                                 Details = "SubState: _prefab → _instance リネーム必要",
+                            });
+                        }
+
+                        // LinkModule フィールド不整合検出 (ButtonModule→LinkModule リネーム)
+                        if (content.Contains(LinkModuleGuid) && content.Contains("_buttonStateLinkSets"))
+                        {
+                            _fieldFixResults.Add(new ScanResult
+                            {
+                                AssetPath = path,
+                                Details = "LinkModule: _buttonStateLinkSets → _stateLinkSets + Button → Target",
                             });
                         }
                     }
@@ -316,10 +325,15 @@ namespace MornLib
 
                     if (modified)
                     {
-                        // SubState フィールドリネーム
+                        // フィールドリネーム
                         if (content.Contains(SubStateNewGuid))
                         {
                             content = FixSubStateFields(content);
+                        }
+
+                        if (content.Contains(LinkModuleGuid))
+                        {
+                            content = FixLinkModuleFields(content);
                         }
 
                         File.WriteAllText(fullPath, content);
@@ -713,14 +727,43 @@ namespace MornLib
             {
                 var content = File.ReadAllText(fullPath);
                 content = FixSubStateFields(content);
+                content = FixLinkModuleFields(content);
                 File.WriteAllText(fullPath, content);
                 AssetDatabase.ImportAsset(assetPath);
-                Debug.Log($"[Morn Migration] {assetPath}: SubState フィールド修正完了");
+                Debug.Log($"[Morn Migration] {assetPath}: フィールド修正完了");
             }
             catch (Exception e)
             {
                 Debug.LogError($"[Morn Migration] {assetPath} の修正に失敗: {e.Message}");
             }
+        }
+
+        /// <summary>
+        /// MornUGUIButtonModule → MornUGUILinkModule のフィールドリネーム。
+        /// _buttonStateLinkSets → _stateLinkSets, Button → Target
+        /// </summary>
+        private static string FixLinkModuleFields(string content)
+        {
+            if (!content.Contains("_buttonStateLinkSets"))
+            {
+                return content;
+            }
+
+            content = content.Replace("_buttonStateLinkSets", "_stateLinkSets");
+            // ButtonStateLinkSet 内の "Button:" フィールドを "Target:" にリネーム
+            // YAML 形式: "      Button: {fileID: xxx}" → "      Target: {fileID: xxx}"
+            var lines = content.Split('\n');
+            for (var i = 0; i < lines.Length; i++)
+            {
+                var trimmed = lines[i].TrimStart();
+                if (trimmed.StartsWith("Button:") && trimmed.Contains("{fileID:"))
+                {
+                    lines[i] = lines[i].Replace("Button:", "Target:");
+                    Debug.Log($"[Morn Migration] LinkModule フィールドリネーム: Button → Target (line {i + 1})");
+                }
+            }
+
+            return string.Join('\n', lines);
         }
     }
 }
