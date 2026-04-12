@@ -861,6 +861,10 @@ namespace MornLib
                     }
 
                     mornButton.navigation = button.navigation;
+                    mornButton.transition = button.transition;
+                    mornButton.colors = button.colors;
+                    mornButton.spriteState = button.spriteState;
+                    mornButton.animationTriggers = button.animationTriggers;
                     mornButton.interactable = button.interactable;
                     mornButton.targetGraphic = button.targetGraphic;
                     UnityEngine.Object.DestroyImmediate(button);
