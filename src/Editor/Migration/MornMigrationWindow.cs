@@ -912,6 +912,19 @@ namespace MornLib
                     return;
                 }
 
+                // Button の m_Component エントリを先に削除 (fileID 置換前)
+                foreach (var fileId in buttonFileIdsToRemove)
+                {
+                    for (var i = lines.Count - 1; i >= 0; i--)
+                    {
+                        if (lines[i].TrimStart().StartsWith("- component:") && lines[i].Contains($"fileID: {fileId}"))
+                        {
+                            lines.RemoveAt(i);
+                            break;
+                        }
+                    }
+                }
+
                 // 全テキストを結合してから fileID 置換 + ブロック削除
                 content = string.Join('\n', lines);
 
@@ -1102,20 +1115,10 @@ namespace MornLib
 
                 // ブロック削除
                 lines.RemoveRange(i, endLine - i + 1);
-
-                // m_Component リストからも削除
-                for (var j = 0; j < lines.Count; j++)
-                {
-                    if (lines[j].Contains($"fileID: {fileId}") && lines[j].TrimStart().StartsWith("- component:"))
-                    {
-                        lines.RemoveAt(j);
-                        break;
-                    }
-                }
-
                 break;
             }
         }
+
     }
 }
 #endif
