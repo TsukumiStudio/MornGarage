@@ -664,7 +664,7 @@ namespace MornLib
                     }
 
                     File.WriteAllText(fullPath, content);
-                    AssetDatabase.ImportAsset(result.AssetPath);
+                    AssetDatabase.Refresh();
                     Debug.Log($"[Morn Migration] {result.AssetPath}: {remap.oldName} → {remap.newName}");
                 }
             }
@@ -833,7 +833,7 @@ namespace MornLib
                 content = FixSubStateFields(content);
                 content = FixControlStateFields(content);
                 File.WriteAllText(fullPath, content);
-                AssetDatabase.ImportAsset(assetPath);
+                AssetDatabase.Refresh();
                 Debug.Log($"[Morn Migration] {assetPath}: フィールド修正完了");
             }
             catch (Exception e)
@@ -1009,10 +1009,8 @@ namespace MornLib
                     var btn = kvp.Value[buttonComp];
                     var mrn = kvp.Value[mornComp];
 
-                    // Selectable フィールドを Button → MornUGUIButton にコピー
-                    CopySelectableFields(lines, btn, mrn);
-
                     // fileID 置換テーブルに追加
+                    // (Selectable フィールドコピーは不要 — MornUGUIButton 自身が Selectable を継承済み)
                     fileIdReplacements[btn.FileId] = mrn.FileId;
                     buttonFileIdsToRemove.Add(btn.FileId);
                     modified = true;
@@ -1056,7 +1054,7 @@ namespace MornLib
 
                 content = string.Join('\n', lines);
                 File.WriteAllText(fullPath, content);
-                AssetDatabase.ImportAsset(assetPath);
+                AssetDatabase.Refresh();
                 Debug.Log($"[Morn Migration] {assetPath}: Button 統合 + 参照引き継ぎ完了");
             }
             catch (Exception e)
