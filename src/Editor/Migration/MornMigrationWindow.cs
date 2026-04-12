@@ -846,50 +846,274 @@ namespace MornLib
             EditorGUI.indentLevel--;
         }
 
-        private static void MergeSinglePrefab(string path)
+        /// <summary>
+        /// YAML テキスト操作で Button → MornUGUIButton 統合。
+        /// 1. Button コンポーネントの Selectable フィールドを MornUGUIButton にコピー
+        /// 2. Button の fileID を MornUGUIButton の fileID に全置換 (参照引き継ぎ)
+        /// 3. Button コンポーネントブロックを削除
+        /// 4. GameObject の m_Component リストから Button の参照を削除
+        /// </summary>
+        private static void MergeSinglePrefab(string assetPath)
         {
+            var fullPath = Path.Combine(
+                Directory.GetParent(Application.dataPath)!.FullName, assetPath);
+
             try
             {
-                var root = PrefabUtility.LoadPrefabContents(path);
-                var count = 0;
-                foreach (var mornButton in root.GetComponentsInChildren<MornUGUIButton>(true))
+                var content = File.ReadAllText(fullPath);
+                var lines = content.Split('\n').ToList();
+                var modified = false;
+
+                // 同一 GameObject 上の Button と MornUGUIButton のペアを探す
+                // まず全コンポーネントブロックを解析
+                var components = ParseComponents(lines);
+
+                // GameObject ごとにグルーピング
+                var goComponents = new Dictionary<string, List<ComponentInfo>>();
+                foreach (var comp in components)
                 {
-                    var button = mornButton.GetComponent<Button>();
-                    if (button == null)
+                    if (!goComponents.ContainsKey(comp.GameObjectFileId))
+                    {
+                        goComponents[comp.GameObjectFileId] = new List<ComponentInfo>();
+                    }
+
+                    goComponents[comp.GameObjectFileId].Add(comp);
+                }
+
+                // Button + MornUGUIButton 共存を検出して統合
+                var buttonFileIdsToRemove = new List<string>();
+                var fileIdReplacements = new Dictionary<string, string>();
+
+                foreach (var kvp in goComponents)
+                {
+                    var buttonComp = kvp.Value.FindIndex(c => c.ScriptGuid == UnityButtonGuid);
+                    var mornComp = kvp.Value.FindIndex(c => c.ScriptGuid == MornUGUIButtonGuid);
+                    if (buttonComp < 0 || mornComp < 0)
                     {
                         continue;
                     }
 
-                    mornButton.navigation = button.navigation;
-                    mornButton.transition = button.transition;
-                    mornButton.colors = button.colors;
-                    mornButton.spriteState = button.spriteState;
-                    mornButton.animationTriggers = button.animationTriggers;
-                    mornButton.interactable = button.interactable;
-                    mornButton.targetGraphic = button.targetGraphic;
-                    UnityEngine.Object.DestroyImmediate(button);
-                    count++;
+                    var btn = kvp.Value[buttonComp];
+                    var mrn = kvp.Value[mornComp];
+
+                    // Selectable フィールドを Button → MornUGUIButton にコピー
+                    CopySelectableFields(lines, btn, mrn);
+
+                    // fileID 置換テーブルに追加
+                    fileIdReplacements[btn.FileId] = mrn.FileId;
+                    buttonFileIdsToRemove.Add(btn.FileId);
+                    modified = true;
+
+                    Debug.Log($"[Morn Migration] {assetPath}: Button({btn.FileId}) → MornUGUIButton({mrn.FileId}) 統合");
                 }
 
-                // Missing script チェック
-                var hasMissing = root.GetComponentsInChildren<Component>(true)
-                    .Any(c => c == null);
-
-                if (count > 0 && !hasMissing)
+                if (!modified)
                 {
-                    PrefabUtility.SaveAsPrefabAsset(root, path);
-                    Debug.Log($"[Morn Migration] {path}: Button → MornUGUIButton 統合 ({count}件)");
-                }
-                else if (hasMissing)
-                {
-                    Debug.LogWarning($"[Morn Migration] {path}: Missing script があるため保存をスキップしました。先に Missing script を解消してください。");
+                    return;
                 }
 
-                PrefabUtility.UnloadPrefabContents(root);
+                // 全テキストを結合してから fileID 置換 + ブロック削除
+                content = string.Join('\n', lines);
+
+                // fileID 参照を全置換
+                foreach (var kvp in fileIdReplacements)
+                {
+                    content = content.Replace($"fileID: {kvp.Key}", $"fileID: {kvp.Value}");
+                }
+
+                // Button コンポーネントブロックを削除
+                lines = content.Split('\n').ToList();
+                foreach (var fileId in buttonFileIdsToRemove)
+                {
+                    RemoveComponentBlock(lines, fileId, UnityButtonGuid);
+                }
+
+                content = string.Join('\n', lines);
+                File.WriteAllText(fullPath, content);
+                AssetDatabase.ImportAsset(assetPath);
+                Debug.Log($"[Morn Migration] {assetPath}: Button 統合 + 参照引き継ぎ完了");
             }
             catch (Exception e)
             {
-                Debug.LogError($"[Morn Migration] {path} の統合に失敗: {e.Message}");
+                Debug.LogError($"[Morn Migration] {assetPath} の統合に失敗: {e.Message}");
+            }
+        }
+
+        private struct ComponentInfo
+        {
+            public string FileId;
+            public string ScriptGuid;
+            public string GameObjectFileId;
+            public int StartLine;
+            public int EndLine;
+        }
+
+        private static List<ComponentInfo> ParseComponents(List<string> lines)
+        {
+            var result = new List<ComponentInfo>();
+            for (var i = 0; i < lines.Count; i++)
+            {
+                // --- !u!114 &FILEID
+                if (!lines[i].StartsWith("--- !u!114 &"))
+                {
+                    continue;
+                }
+
+                var fileId = lines[i].Substring("--- !u!114 &".Length).Trim();
+                var scriptGuid = "";
+                var goFileId = "";
+                var endLine = lines.Count - 1;
+
+                for (var j = i + 1; j < lines.Count; j++)
+                {
+                    if (lines[j].StartsWith("--- "))
+                    {
+                        endLine = j - 1;
+                        break;
+                    }
+
+                    var trimmed = lines[j].TrimStart();
+                    if (trimmed.StartsWith("m_Script:") && trimmed.Contains("guid: "))
+                    {
+                        var guidStart = trimmed.IndexOf("guid: ", StringComparison.Ordinal) + 6;
+                        var guidEnd = trimmed.IndexOf(',', guidStart);
+                        if (guidEnd > guidStart)
+                        {
+                            scriptGuid = trimmed.Substring(guidStart, guidEnd - guidStart);
+                        }
+                    }
+
+                    if (trimmed.StartsWith("m_GameObject:") && trimmed.Contains("fileID: "))
+                    {
+                        var fidStart = trimmed.IndexOf("fileID: ", StringComparison.Ordinal) + 8;
+                        var fidEnd = trimmed.IndexOf('}', fidStart);
+                        if (fidEnd > fidStart)
+                        {
+                            goFileId = trimmed.Substring(fidStart, fidEnd - fidStart);
+                        }
+                    }
+                }
+
+                if (!string.IsNullOrEmpty(scriptGuid))
+                {
+                    result.Add(new ComponentInfo
+                    {
+                        FileId = fileId,
+                        ScriptGuid = scriptGuid,
+                        GameObjectFileId = goFileId,
+                        StartLine = i,
+                        EndLine = endLine,
+                    });
+                }
+            }
+
+            return result;
+        }
+
+        private static readonly string[] SelectableFields =
+        {
+            "m_Navigation:", "m_Transition:", "m_Colors:", "m_SpriteState:",
+            "m_AnimationTriggers:", "m_Interactable:", "m_TargetGraphic:",
+        };
+
+        private static void CopySelectableFields(List<string> lines, ComponentInfo source, ComponentInfo target)
+        {
+            // source (Button) から Selectable フィールドを抽出
+            var fieldLines = new List<string>();
+            for (var i = source.StartLine + 1; i <= source.EndLine; i++)
+            {
+                var trimmed = lines[i].TrimStart();
+                var isSelectableField = false;
+                foreach (var sf in SelectableFields)
+                {
+                    if (trimmed.StartsWith(sf))
+                    {
+                        isSelectableField = true;
+                        break;
+                    }
+                }
+
+                if (!isSelectableField)
+                {
+                    continue;
+                }
+
+                // このフィールドのブロック全体 (インデント深い行も含む) を収集
+                fieldLines.Add(lines[i]);
+                for (var j = i + 1; j <= source.EndLine; j++)
+                {
+                    var nextTrimmed = lines[j].TrimStart();
+                    // 次のトップレベルフィールドが来たら終了
+                    if (nextTrimmed.Length > 0 && !nextTrimmed.StartsWith(" ") &&
+                        !nextTrimmed.StartsWith("-") && !char.IsWhiteSpace(nextTrimmed[0]))
+                    {
+                        break;
+                    }
+
+                    // インデントが浅い or 新しいフィールドならbreak
+                    if (lines[j].Length > 0 && lines[j][0] != ' ' && !lines[j].TrimStart().StartsWith("-")
+                        && !lines[j].TrimStart().StartsWith("m_"))
+                    {
+                        break;
+                    }
+
+                    fieldLines.Add(lines[j]);
+                    i = j; // skip
+                }
+            }
+
+            if (fieldLines.Count == 0)
+            {
+                return;
+            }
+
+            // target (MornUGUIButton) の既存 Selectable フィールドを削除して source のものを挿入
+            // まず target 内の m_EditorClassIdentifier: の後にフィールドを挿入
+            for (var i = target.StartLine + 1; i <= target.EndLine; i++)
+            {
+                if (lines[i].TrimStart().StartsWith("m_EditorClassIdentifier:"))
+                {
+                    // この行の後に挿入
+                    lines.InsertRange(i + 1, fieldLines);
+                    return;
+                }
+            }
+        }
+
+        private static void RemoveComponentBlock(List<string> lines, string fileId, string scriptGuid)
+        {
+            for (var i = lines.Count - 1; i >= 0; i--)
+            {
+                if (!lines[i].StartsWith($"--- !u!114 &{fileId}"))
+                {
+                    continue;
+                }
+
+                // このブロックの終端を探す
+                var endLine = lines.Count - 1;
+                for (var j = i + 1; j < lines.Count; j++)
+                {
+                    if (lines[j].StartsWith("--- "))
+                    {
+                        endLine = j - 1;
+                        break;
+                    }
+                }
+
+                // ブロック削除
+                lines.RemoveRange(i, endLine - i + 1);
+
+                // m_Component リストからも削除
+                for (var j = 0; j < lines.Count; j++)
+                {
+                    if (lines[j].Contains($"fileID: {fileId}") && lines[j].TrimStart().StartsWith("- component:"))
+                    {
+                        lines.RemoveAt(j);
+                        break;
+                    }
+                }
+
+                break;
             }
         }
     }
