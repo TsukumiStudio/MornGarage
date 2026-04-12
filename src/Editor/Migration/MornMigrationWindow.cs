@@ -27,6 +27,10 @@ namespace MornLib
             { "394ac4c5f3df4673862c62fc0563a7fb", ("25ce3e5de7204deabd088884851df9a5", "ObsoletePlayAnimationProcess", "PlayAnimationProcess") },
         };
 
+        // ========== フィールドリネーム (GUID リマップ後に適用) ==========
+        // ObsoleteSubState → SubState: _instantiate==0 のとき _prefab の値を _instance に移す
+        private static readonly string SubStateNewGuid = "aac67bf328824705a55354ac6d26608c";
+
         // ========== 削除された GUID (対応先なし) ==========
         private static readonly Dictionary<string, string> DeletedGuids = new()
         {
@@ -292,13 +296,19 @@ namespace MornLib
 
                     if (modified)
                     {
+                        // SubState フィールドリネーム
+                        if (content.Contains(SubStateNewGuid))
+                        {
+                            content = FixSubStateFields(content);
+                        }
+
                         File.WriteAllText(fullPath, content);
                         modifiedFiles.Add(result.AssetPath);
                     }
                 }
                 catch (Exception e)
                 {
-                    Debug.LogError($"[MornUGUI Migration] {result.AssetPath} の置換に失敗: {e.Message}");
+                    Debug.LogError($"[Morn Migration] {result.AssetPath} の置換に失敗: {e.Message}");
                 }
             }
 
@@ -508,6 +518,13 @@ namespace MornLib
                 if (!string.IsNullOrEmpty(result.OldGuid) && GuidRemapTable.TryGetValue(result.OldGuid, out var remap))
                 {
                     content = content.Replace(result.OldGuid, remap.newGuid);
+
+                    // ObsoleteSubState → SubState: _instantiate==0 のとき _prefab を _instance にリネーム
+                    if (remap.newGuid == SubStateNewGuid)
+                    {
+                        content = FixSubStateFields(content);
+                    }
+
                     File.WriteAllText(fullPath, content);
                     AssetDatabase.ImportAsset(result.AssetPath);
                     Debug.Log($"[Morn Migration] {result.AssetPath}: {remap.oldName} → {remap.newName}");
@@ -517,6 +534,59 @@ namespace MornLib
             {
                 Debug.LogError($"[Morn Migration] {result.AssetPath} の変換に失敗: {e.Message}");
             }
+        }
+
+        /// <summary>
+        /// ObsoleteSubState → SubState のフィールド互換性修正。
+        /// 旧: _prefab が直接参照 + インスタンス化 兼用
+        /// 新: _instance が直接参照用、_prefab がインスタンス化用
+        /// _instantiate: 0 のとき _prefab の値を _instance に移す。
+        /// </summary>
+        private static string FixSubStateFields(string content)
+        {
+            var lines = content.Split('\n');
+            var modified = false;
+            for (var i = 0; i < lines.Length; i++)
+            {
+                // SubState コンポーネントブロック内で _instantiate: 0 かつ _prefab に参照あり を検出
+                if (!lines[i].Contains($"guid: {SubStateNewGuid}"))
+                {
+                    continue;
+                }
+
+                // このコンポーネントブロック内を走査
+                var instantiateValue = -1;
+                var prefabLineIdx = -1;
+                for (var j = i + 1; j < lines.Length; j++)
+                {
+                    var trimmed = lines[j].TrimStart();
+                    // 次のコンポーネント境界
+                    if (trimmed.StartsWith("--- !u!"))
+                    {
+                        break;
+                    }
+
+                    if (trimmed.StartsWith("_instantiate:"))
+                    {
+                        instantiateValue = trimmed.Contains("1") ? 1 : 0;
+                    }
+
+                    if (trimmed.StartsWith("_prefab:") && !trimmed.Contains("{fileID: 0}"))
+                    {
+                        prefabLineIdx = j;
+                    }
+                }
+
+                // _instantiate: 0 かつ _prefab に参照あり → _instance にリネーム
+                if (instantiateValue == 0 && prefabLineIdx >= 0)
+                {
+                    lines[prefabLineIdx] = lines[prefabLineIdx].Replace("_prefab:", "_instance:");
+                    modified = true;
+                    Debug.Log($"[Morn Migration] SubState フィールドリネーム: _prefab → _instance (line {prefabLineIdx + 1})");
+                }
+            }
+
+            return modified ? string.Join('\n', lines) : content;
         }
     }
 }
