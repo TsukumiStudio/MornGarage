@@ -13,25 +13,26 @@ namespace MornLib
         // ========== GUID リマップテーブル ==========
         private static readonly Dictionary<string, (string newGuid, string oldName, string newName)> GuidRemapTable = new()
         {
+            // MornUGUI Module 統合
             { "f7757884ec8e470cb416ef32dbceecdb", ("3b724e5ba7194030a2a965eb502aa345", "MornUGUIButtonActiveModule", "MornUGUIActiveModule") },
             { "82b0ac599184c42bfa443c85ba2fd7d0", ("242140c1ceb74211adff12464434ed55", "MornUGUIButtonColorModule", "MornUGUIColorModule") },
             { "ddd29d8d393f4344889c51b493e844b6", ("28bc5e2a967d4eb4b43706ca161fd00b", "MornUGUIButtonSoundModule", "MornUGUISoundModule") },
             { "38955c969fb645429f8d790f2f1b9ad5", ("3b724e5ba7194030a2a965eb502aa345", "MornUGUISliderActiveModule", "MornUGUIActiveModule") },
             { "00aa1d2f6f3e44a6b1572bb190a4c622", ("242140c1ceb74211adff12464434ed55", "MornUGUISliderColorModule", "MornUGUIColorModule") },
             { "901d32d7664d4ebab804e9f182575c53", ("26859705ac4d4171afc20025d269f521", "MornUGUISliderConvertPointerToSelectModule", "MornUGUIPointerModule") },
+            // MornUGUI Toggle
+            { "aa97cf6498d344038ef47fc0da2b161c", ("710b6c07a89ff4b14adde443d111fa7b", "MornUGUIButtonToggleModule", "MornUGUIToggleModule") },
+            // MornArbor Obsolete → 新型
+            { "ac57e10a4fe04d3499fe699b2eeee5ea", ("aac67bf328824705a55354ac6d26608c", "ObsoleteSubState", "SubState") },
+            { "394ac4c5f3df4673862c62fc0563a7fb", ("25ce3e5de7204deabd088884851df9a5", "ObsoletePlayAnimationProcess", "PlayAnimationProcess") },
         };
 
-        // ========== 削除された GUID ==========
+        // ========== 削除された GUID (対応先なし) ==========
         private static readonly Dictionary<string, string> DeletedGuids = new()
         {
-            // MornUGUI
-            { "e830bade52d747819e91153be1b80223", "MornUGUIButtonModuleBase" },
-            { "e31b2f6049aa48499baee31c0cea8064", "MornUGUISliderModuleBase" },
-            { "aa97cf6498d344038ef47fc0da2b161c", "MornUGUIButtonToggleModule" },
-            { "8be286109e114b849574ebd8390b6191", "MornUGUIButtonModule (Arbor)" },
-            // MornArbor Obsolete
-            { "ac57e10a4fe04d3499fe699b2eeee5ea", "ObsoleteSubState (MornArbor)" },
-            { "394ac4c5f3df4673862c62fc0563a7fb", "ObsoletePlayAnimationProcess (MornArbor)" },
+            { "e830bade52d747819e91153be1b80223", "MornUGUIButtonModuleBase (削除)" },
+            { "e31b2f6049aa48499baee31c0cea8064", "MornUGUISliderModuleBase (削除)" },
+            { "8be286109e114b849574ebd8390b6191", "MornUGUIButtonModule Arbor (削除)" },
         };
 
         // ========== C# 置換テーブル ==========
