@@ -202,10 +202,15 @@ namespace MornLib
                             if (guidIdx >= 0)
                             {
                                 var start = guidIdx + 6;
-                                var end = metaContent.IndexOfAny(new[] { '\n', '\r', ' ' }, start);
+                                var end = metaContent.IndexOfAny(new[] { '\n', '\r', ' ', '\t' }, start);
+                                if (end < 0)
+                                {
+                                    end = metaContent.Length;
+                                }
+
                                 if (end > start)
                                 {
-                                    knownScriptGuids.Add(metaContent.Substring(start, end - start));
+                                    knownScriptGuids.Add(metaContent.Substring(start, end - start).Trim());
                                 }
                             }
                         }
