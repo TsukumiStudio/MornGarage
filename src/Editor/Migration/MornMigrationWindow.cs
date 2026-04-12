@@ -293,7 +293,7 @@ namespace MornLib
                         }
 
                         // MornUGUIControlState フィールド不整合検出
-                        if (content.Contains("_buttonStateLinkSets") || content.Contains("_buttonModule:"))
+                        if (content.Contains("_buttonStateLinkSets") || content.Contains("_buttonModule:") || content.Contains("_autoFocusTarget:"))
                         {
                             _fieldFixResults.Add(new ScanResult
                             {
@@ -875,6 +875,14 @@ namespace MornLib
                 content = content.Replace("_focusModule:", "_autoFocusModule:");
                 modified = true;
                 Debug.Log("[Morn Migration] ControlState: _focusModule → _autoFocusModule");
+            }
+
+            // _autoFocusTarget → _target (AutoFocusModule 内)
+            if (content.Contains("_autoFocusTarget:"))
+            {
+                content = content.Replace("_autoFocusTarget:", "_target:");
+                modified = true;
+                Debug.Log("[Morn Migration] ControlState: _autoFocusTarget → _target");
             }
 
             // Button: → Target: (LinkSet 内)
