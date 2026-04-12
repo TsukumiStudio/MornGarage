@@ -116,6 +116,12 @@ namespace MornLib
                 $"SubState フィールド不整合 ({_fieldFixResults.Count}件)",
                 _fieldFixResults);
 
+            // コンポーネント統合
+            DrawMergeSection(
+                ref _foldMerge,
+                $"Button + MornUGUIButton 共存 ({_mergeResults.Count}件)",
+                _mergeResults);
+
             // C# 変更
             DrawSection(
                 ref _foldCs,
@@ -149,12 +155,6 @@ namespace MornLib
             {
                 PrintReport();
             }
-
-            // コンポーネント統合
-            DrawMergeSection(
-                ref _foldMerge,
-                $"Button + MornUGUIButton 共存 ({_mergeResults.Count}件)",
-                _mergeResults);
         }
 
         private void Scan()
