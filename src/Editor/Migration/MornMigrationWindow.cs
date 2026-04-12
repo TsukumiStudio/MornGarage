@@ -450,9 +450,8 @@ namespace MornLib
                 }
             }
 
-            AssetDatabase.Refresh();
-            Debug.Log($"[MornUGUI Migration] GUID リマップ完了: {modifiedFiles.Count} ファイルを更新");
-            Scan(); // 再スキャン
+            Debug.Log($"[Morn Migration] GUID リマップ完了: {modifiedFiles.Count} ファイルを更新 (Ctrl+R でリフレッシュ)");
+            Scan();
         }
 
         private void ExecuteCsReplace()
@@ -514,9 +513,8 @@ namespace MornLib
                 }
             }
 
-            AssetDatabase.Refresh();
-            Debug.Log($"[MornUGUI Migration] C# 置換完了: {modifiedCount} ファイルを更新");
-            Scan(); // 再スキャン
+            Debug.Log($"[Morn Migration] C# 置換完了: {modifiedCount} ファイルを更新 (Ctrl+R でリフレッシュ)");
+            Scan();
         }
 
         private void PrintReport()
@@ -664,7 +662,7 @@ namespace MornLib
                     }
 
                     File.WriteAllText(fullPath, content);
-                    AssetDatabase.Refresh();
+                    // AssetDatabase.Refresh(); — 手動 Ctrl+R で
                     Debug.Log($"[Morn Migration] {result.AssetPath}: {remap.oldName} → {remap.newName}");
                 }
             }
@@ -833,7 +831,7 @@ namespace MornLib
                 content = FixSubStateFields(content);
                 content = FixControlStateFields(content);
                 File.WriteAllText(fullPath, content);
-                AssetDatabase.Refresh();
+                // AssetDatabase.Refresh(); — 手動 Ctrl+R で
                 Debug.Log($"[Morn Migration] {assetPath}: フィールド修正完了");
             }
             catch (Exception e)
