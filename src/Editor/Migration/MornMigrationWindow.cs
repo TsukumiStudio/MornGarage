@@ -50,6 +50,7 @@ namespace MornLib
         private readonly List<ScanResult> _remapResults = new();
         private readonly List<ScanResult> _deletedResults = new();
         private readonly List<ScanResult> _csResults = new();
+        private readonly List<ScanResult> _fieldFixResults = new();
         private Vector2 _scrollPos;
         private bool _scanPrefabs = true;
         private bool _scanScenes = true;
@@ -57,6 +58,7 @@ namespace MornLib
         private bool _foldRemap = true;
         private bool _foldDeleted = true;
         private bool _foldCs = true;
+        private bool _foldFieldFix = true;
 
         private struct ScanResult
         {
@@ -106,6 +108,12 @@ namespace MornLib
                 _deletedResults,
                 new Color(1f, 0.5f, 0.5f));
 
+            // フィールド不整合
+            DrawFieldFixSection(
+                ref _foldFieldFix,
+                $"SubState フィールド不整合 ({_fieldFixResults.Count}件)",
+                _fieldFixResults);
+
             // C# 変更
             DrawSection(
                 ref _foldCs,
@@ -146,6 +154,8 @@ namespace MornLib
             _remapResults.Clear();
             _deletedResults.Clear();
             _csResults.Clear();
+
+            _fieldFixResults.Clear();
 
             var allGuids = GuidRemapTable.Keys
                 .Concat(DeletedGuids.Keys)
@@ -203,6 +213,16 @@ namespace MornLib
                                     Details = $"{kvp.Value} (削除済み)",
                                 });
                             }
+                        }
+
+                        // SubState フィールド不整合検出 (新GUID済みだが _prefab/_instance 不一致)
+                        if (content.Contains(SubStateNewGuid) && HasSubStateFieldMismatch(content))
+                        {
+                            _fieldFixResults.Add(new ScanResult
+                            {
+                                AssetPath = path,
+                                Details = "SubState: _prefab → _instance リネーム必要",
+                            });
                         }
                     }
                     catch (Exception)
@@ -587,6 +607,120 @@ namespace MornLib
             }
 
             return modified ? string.Join('\n', lines) : content;
+        }
+
+        /// <summary>新 SubState GUID を持つが _instantiate:0 + _prefab に値あり のパターンを検出</summary>
+        private static bool HasSubStateFieldMismatch(string content)
+        {
+            var lines = content.Split('\n');
+            for (var i = 0; i < lines.Length; i++)
+            {
+                if (!lines[i].Contains($"guid: {SubStateNewGuid}"))
+                {
+                    continue;
+                }
+
+                var instantiateValue = -1;
+                var hasPrefabRef = false;
+                for (var j = i + 1; j < lines.Length; j++)
+                {
+                    var trimmed = lines[j].TrimStart();
+                    if (trimmed.StartsWith("--- !u!"))
+                    {
+                        break;
+                    }
+
+                    if (trimmed.StartsWith("_instantiate:"))
+                    {
+                        instantiateValue = trimmed.Contains("1") ? 1 : 0;
+                    }
+
+                    if (trimmed.StartsWith("_prefab:") && !trimmed.Contains("{fileID: 0}"))
+                    {
+                        hasPrefabRef = true;
+                    }
+                }
+
+                if (instantiateValue == 0 && hasPrefabRef)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private void DrawFieldFixSection(
+            ref bool foldout,
+            string title,
+            List<ScanResult> results)
+        {
+            var originalColor = GUI.backgroundColor;
+            GUI.backgroundColor = new Color(1f, 0.7f, 0.3f);
+            foldout = EditorGUILayout.Foldout(foldout, title, true, EditorStyles.foldoutHeader);
+            GUI.backgroundColor = originalColor;
+
+            if (!foldout)
+            {
+                return;
+            }
+
+            if (results.Count == 0)
+            {
+                EditorGUILayout.LabelField("  (なし)", EditorStyles.miniLabel);
+                return;
+            }
+
+            EditorGUI.indentLevel++;
+            for (var i = results.Count - 1; i >= 0; i--)
+            {
+                var result = results[i];
+                using (new EditorGUILayout.HorizontalScope())
+                {
+                    if (GUILayout.Button(
+                            Path.GetFileName(result.AssetPath),
+                            EditorStyles.linkLabel,
+                            GUILayout.ExpandWidth(false)))
+                    {
+                        var obj = AssetDatabase.LoadAssetAtPath<UnityEngine.Object>(result.AssetPath);
+                        if (obj != null)
+                        {
+                            EditorGUIUtility.PingObject(obj);
+                            Selection.activeObject = obj;
+                        }
+                    }
+
+                    EditorGUILayout.LabelField(result.Details, EditorStyles.miniLabel);
+
+                    if (GUILayout.Button("修正", GUILayout.Width(40)))
+                    {
+                        FixSubStateFieldsInFile(result.AssetPath);
+                        results.RemoveAt(i);
+                    }
+                }
+            }
+
+            EditorGUI.indentLevel--;
+        }
+
+        private static void FixSubStateFieldsInFile(string assetPath)
+        {
+            var fullPath = Path.Combine(
+                Directory.GetParent(Application.dataPath)!.FullName,
+                assetPath);
+
+            try
+            {
+                var content = File.ReadAllText(fullPath);
+                content = FixSubStateFields(content);
+                File.WriteAllText(fullPath, content);
+                AssetDatabase.ImportAsset(assetPath);
+                Debug.Log($"[Morn Migration] {assetPath}: SubState フィールド修正完了");
+            }
+            catch (Exception e)
+            {
+                Debug.LogError($"[Morn Migration] {assetPath} の修正に失敗: {e.Message}");
+            }
         }
     }
 }
