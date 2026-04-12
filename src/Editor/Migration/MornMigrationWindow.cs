@@ -292,13 +292,13 @@ namespace MornLib
                             });
                         }
 
-                        // LinkModule フィールド不整合検出 (ButtonModule→LinkModule リネーム)
-                        if (content.Contains("_buttonStateLinkSets"))
+                        // MornUGUIControlState フィールド不整合検出
+                        if (content.Contains("_buttonStateLinkSets") || content.Contains("_buttonModule:"))
                         {
                             _fieldFixResults.Add(new ScanResult
                             {
                                 AssetPath = path,
-                                Details = "LinkModule: _buttonStateLinkSets → _stateLinkSets + Button → Target",
+                                Details = "ControlState: _buttonModule→_linkModule, フィールドリネーム",
                             });
                         }
 
@@ -437,7 +437,7 @@ namespace MornLib
 
                         if (content.Contains(LinkModuleGuid))
                         {
-                            content = FixLinkModuleFields(content);
+                            content = FixControlStateFields(content);
                         }
 
                         File.WriteAllText(fullPath, content);
@@ -831,7 +831,7 @@ namespace MornLib
             {
                 var content = File.ReadAllText(fullPath);
                 content = FixSubStateFields(content);
-                content = FixLinkModuleFields(content);
+                content = FixControlStateFields(content);
                 File.WriteAllText(fullPath, content);
                 AssetDatabase.ImportAsset(assetPath);
                 Debug.Log($"[Morn Migration] {assetPath}: フィールド修正完了");
@@ -843,32 +843,60 @@ namespace MornLib
         }
 
         /// <summary>
-        /// MornUGUIButtonModule → MornUGUILinkModule のフィールドリネーム。
-        /// _buttonStateLinkSets → _stateLinkSets, Button → Target
+        /// MornUGUIControlState 全体のフィールドリネーム。
+        /// _buttonModule → _linkModule
+        /// _buttonStateLinkSets → _stateLinkSets
+        /// Button: → Target: (LinkSet 内)
+        /// _focusModule → _autoFocusModule
+        /// モジュール内 _ignore/_active → _isActive
+        /// _leftFrame 削除
         /// </summary>
-        private static string FixLinkModuleFields(string content)
+        private static string FixControlStateFields(string content)
         {
-            if (!content.Contains("_buttonStateLinkSets"))
+            var modified = false;
+
+            // _buttonModule → _linkModule
+            if (content.Contains("_buttonModule:"))
             {
-                return content;
+                content = content.Replace("_buttonModule:", "_linkModule:");
+                modified = true;
+                Debug.Log("[Morn Migration] ControlState: _buttonModule → _linkModule");
             }
 
-            content = content.Replace("_buttonStateLinkSets", "_stateLinkSets");
-            // ButtonStateLinkSet 内の "Button:" フィールドを "Target:" にリネーム
-            // YAML 形式: "      Button: {fileID: xxx}" → "      Target: {fileID: xxx}"
+            // _buttonStateLinkSets → _stateLinkSets
+            if (content.Contains("_buttonStateLinkSets"))
+            {
+                content = content.Replace("_buttonStateLinkSets", "_stateLinkSets");
+                modified = true;
+                Debug.Log("[Morn Migration] ControlState: _buttonStateLinkSets → _stateLinkSets");
+            }
+
+            // _focusModule → _autoFocusModule
+            if (content.Contains("_focusModule:"))
+            {
+                content = content.Replace("_focusModule:", "_autoFocusModule:");
+                modified = true;
+                Debug.Log("[Morn Migration] ControlState: _focusModule → _autoFocusModule");
+            }
+
+            // Button: → Target: (LinkSet 内)
             var lines = content.Split('\n');
             for (var i = 0; i < lines.Length; i++)
             {
                 var trimmed = lines[i].TrimStart();
-                // YAML リスト項目: "- Button: {fileID:...}" または "Button: {fileID:...}"
                 if ((trimmed.StartsWith("Button:") || trimmed.StartsWith("- Button:")) && trimmed.Contains("{fileID:"))
                 {
                     lines[i] = lines[i].Replace("Button:", "Target:");
-                    Debug.Log($"[Morn Migration] LinkModule フィールドリネーム: Button → Target (line {i + 1})");
+                    modified = true;
                 }
             }
 
-            return string.Join('\n', lines);
+            if (modified)
+            {
+                content = string.Join('\n', lines);
+            }
+
+            return content;
         }
 
         /// <summary>
