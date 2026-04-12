@@ -1054,8 +1054,7 @@ namespace MornLib
 
                 content = string.Join('\n', lines);
                 File.WriteAllText(fullPath, content);
-                AssetDatabase.Refresh();
-                Debug.Log($"[Morn Migration] {assetPath}: Button 統合 + 参照引き継ぎ完了");
+                Debug.Log($"[Morn Migration] {assetPath}: Button 統合 + 参照引き継ぎ完了 (Ctrl+R でリフレッシュしてください)");
             }
             catch (Exception e)
             {
