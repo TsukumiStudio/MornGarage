@@ -302,8 +302,8 @@ namespace MornLib
                             });
                         }
 
-                        // Button + MornUGUIButton 共存検出
-                        if (content.Contains(UnityButtonGuid) && content.Contains(MornUGUIButtonGuid))
+                        // Button + MornUGUIButton 共存検出 (stripped は除外)
+                        if (HasNonStrippedButton(content) && content.Contains(MornUGUIButtonGuid))
                         {
                             _mergeResults.Add(new ScanResult
                             {
@@ -1106,6 +1106,37 @@ namespace MornLib
             }
 
             return result;
+        }
+
+        /// <summary>stripped でない Button コンポーネントが存在するか</summary>
+        private static bool HasNonStrippedButton(string content)
+        {
+            var idx = 0;
+            while (true)
+            {
+                idx = content.IndexOf(UnityButtonGuid, idx, StringComparison.Ordinal);
+                if (idx < 0)
+                {
+                    return false;
+                }
+
+                // この GUID を含むブロックヘッダーを探す (--- !u!114 &xxx か --- !u!114 &xxx stripped か)
+                var blockStart = content.LastIndexOf("--- !u!", idx, StringComparison.Ordinal);
+                if (blockStart >= 0)
+                {
+                    var headerEnd = content.IndexOf('\n', blockStart);
+                    if (headerEnd > blockStart)
+                    {
+                        var header = content.Substring(blockStart, headerEnd - blockStart);
+                        if (!header.Contains("stripped"))
+                        {
+                            return true;
+                        }
+                    }
+                }
+
+                idx++;
+            }
         }
 
         private static readonly string[] SelectableFields =
