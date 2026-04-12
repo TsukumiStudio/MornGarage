@@ -58,6 +58,7 @@ namespace MornLib
         {
             public string AssetPath;
             public string Details;
+            public string OldGuid;
         }
 
         [MenuItem("Tools/Morn Migration Tool")]
@@ -89,11 +90,10 @@ namespace MornLib
             _scrollPos = EditorGUILayout.BeginScrollView(_scrollPos);
 
             // GUID リマップ
-            DrawSection(
+            DrawRemapSection(
                 ref _foldRemap,
                 $"GUID リマップ必要 ({_remapResults.Count}件)",
-                _remapResults,
-                new Color(1f, 0.9f, 0.4f));
+                _remapResults);
 
             // Missing
             DrawSection(
@@ -184,6 +184,7 @@ namespace MornLib
                                 {
                                     AssetPath = path,
                                     Details = $"{kvp.Value.oldName} → {kvp.Value.newName}",
+                                    OldGuid = kvp.Key,
                                 });
                             }
                         }
@@ -440,6 +441,82 @@ namespace MornLib
             }
 
             EditorGUI.indentLevel--;
+        }
+
+        private void DrawRemapSection(
+            ref bool foldout,
+            string title,
+            List<ScanResult> results)
+        {
+            var originalColor = GUI.backgroundColor;
+            GUI.backgroundColor = new Color(1f, 0.9f, 0.4f);
+            foldout = EditorGUILayout.Foldout(foldout, title, true, EditorStyles.foldoutHeader);
+            GUI.backgroundColor = originalColor;
+
+            if (!foldout)
+            {
+                return;
+            }
+
+            if (results.Count == 0)
+            {
+                EditorGUILayout.LabelField("  (なし)", EditorStyles.miniLabel);
+                return;
+            }
+
+            EditorGUI.indentLevel++;
+            for (var i = results.Count - 1; i >= 0; i--)
+            {
+                var result = results[i];
+                using (new EditorGUILayout.HorizontalScope())
+                {
+                    if (GUILayout.Button(
+                            Path.GetFileName(result.AssetPath),
+                            EditorStyles.linkLabel,
+                            GUILayout.ExpandWidth(false)))
+                    {
+                        var obj = AssetDatabase.LoadAssetAtPath<UnityEngine.Object>(result.AssetPath);
+                        if (obj != null)
+                        {
+                            EditorGUIUtility.PingObject(obj);
+                            Selection.activeObject = obj;
+                        }
+                    }
+
+                    EditorGUILayout.LabelField(result.Details, EditorStyles.miniLabel);
+
+                    if (GUILayout.Button("変換", GUILayout.Width(40)))
+                    {
+                        RemapSingleFile(result);
+                        results.RemoveAt(i);
+                    }
+                }
+            }
+
+            EditorGUI.indentLevel--;
+        }
+
+        private void RemapSingleFile(ScanResult result)
+        {
+            var fullPath = Path.Combine(
+                Directory.GetParent(Application.dataPath)!.FullName,
+                result.AssetPath);
+
+            try
+            {
+                var content = File.ReadAllText(fullPath);
+                if (!string.IsNullOrEmpty(result.OldGuid) && GuidRemapTable.TryGetValue(result.OldGuid, out var remap))
+                {
+                    content = content.Replace(result.OldGuid, remap.newGuid);
+                    File.WriteAllText(fullPath, content);
+                    AssetDatabase.ImportAsset(result.AssetPath);
+                    Debug.Log($"[Morn Migration] {result.AssetPath}: {remap.oldName} → {remap.newName}");
+                }
+            }
+            catch (Exception e)
+            {
+                Debug.LogError($"[Morn Migration] {result.AssetPath} の変換に失敗: {e.Message}");
+            }
         }
     }
 }
