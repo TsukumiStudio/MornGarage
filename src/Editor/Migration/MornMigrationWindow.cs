@@ -52,6 +52,7 @@ namespace MornLib
         private readonly List<ScanResult> _csResults = new();
         private readonly List<ScanResult> _fieldFixResults = new();
         private readonly List<ScanResult> _mergeResults = new();
+        private readonly List<ScanResult> _missingScriptResults = new();
         private Vector2 _scrollPos;
         private bool _scanPrefabs = true;
         private bool _scanScenes = true;
@@ -61,6 +62,7 @@ namespace MornLib
         private bool _foldCs = true;
         private bool _foldFieldFix = true;
         private bool _foldMerge = true;
+        private bool _foldMissingScript = true;
 
         private struct ScanResult
         {
@@ -129,6 +131,13 @@ namespace MornLib
                 _csResults,
                 new Color(0.6f, 0.8f, 1f));
 
+            // Missing Script
+            DrawSection(
+                ref _foldMissingScript,
+                $"Missing Script ({_missingScriptResults.Count}件)",
+                _missingScriptResults,
+                new Color(1f, 0.4f, 0.4f));
+
             EditorGUILayout.EndScrollView();
 
             EditorGUILayout.Space(10);
@@ -164,6 +173,51 @@ namespace MornLib
             _csResults.Clear();
             _fieldFixResults.Clear();
             _mergeResults.Clear();
+            _missingScriptResults.Clear();
+
+            // プロジェクト全体の script GUID を収集 (Assets + Packages + Library/PackageCache)
+            var knownScriptGuids = new HashSet<string>();
+            if (_scanPrefabs || _scanScenes)
+            {
+                var projectRoot = Directory.GetParent(Application.dataPath)!.FullName;
+                var searchDirs = new[]
+                {
+                    Application.dataPath, // Assets/
+                    Path.Combine(projectRoot, "Packages"),
+                    Path.Combine(projectRoot, "Library", "PackageCache"),
+                };
+                foreach (var dir in searchDirs)
+                {
+                    if (!Directory.Exists(dir))
+                    {
+                        continue;
+                    }
+
+                    foreach (var metaFile in Directory.GetFiles(dir, "*.cs.meta", SearchOption.AllDirectories))
+                    {
+                        try
+                        {
+                            var metaContent = File.ReadAllText(metaFile);
+                            var guidIdx = metaContent.IndexOf("guid: ", StringComparison.Ordinal);
+                            if (guidIdx >= 0)
+                            {
+                                var start = guidIdx + 6;
+                                var end = metaContent.IndexOfAny(new[] { '\n', '\r', ' ' }, start);
+                                if (end > start)
+                                {
+                                    knownScriptGuids.Add(metaContent.Substring(start, end - start));
+                                }
+                            }
+                        }
+                        catch (Exception)
+                        {
+                            // skip
+                        }
+                    }
+                }
+
+                Debug.Log($"[Morn Migration] 既知 script GUID: {knownScriptGuids.Count} 件を収集");
+            }
 
             var allGuids = GuidRemapTable.Keys
                 .Concat(DeletedGuids.Keys)
@@ -251,6 +305,32 @@ namespace MornLib
                                 AssetPath = path,
                                 Details = "Button + MornUGUIButton 共存 → 統合可能",
                             });
+                        }
+
+                        // Missing script 検出 (全 m_Script guid を検査)
+                        if (knownScriptGuids.Count > 0)
+                        {
+                            var idx = 0;
+                            while ((idx = content.IndexOf("m_Script: {fileID: 11500000, guid: ", idx, StringComparison.Ordinal)) >= 0)
+                            {
+                                var guidStart = idx + "m_Script: {fileID: 11500000, guid: ".Length;
+                                var guidEnd = content.IndexOf(',', guidStart);
+                                if (guidEnd > guidStart)
+                                {
+                                    var scriptGuid = content.Substring(guidStart, guidEnd - guidStart);
+                                    if (!knownScriptGuids.Contains(scriptGuid))
+                                    {
+                                        _missingScriptResults.Add(new ScanResult
+                                        {
+                                            AssetPath = path,
+                                            Details = $"Missing script: {scriptGuid}",
+                                            OldGuid = scriptGuid,
+                                        });
+                                    }
+                                }
+
+                                idx = guidEnd > 0 ? guidEnd : idx + 1;
+                            }
                         }
                     }
                     catch (Exception)
