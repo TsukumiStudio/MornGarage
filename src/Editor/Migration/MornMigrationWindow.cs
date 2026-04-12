@@ -5,6 +5,7 @@ using System.IO;
 using System.Linq;
 using UnityEditor;
 using UnityEngine;
+using UnityEngine.UI;
 
 namespace MornLib
 {
@@ -145,6 +146,13 @@ namespace MornLib
             if (GUILayout.Button("レポート出力 (Console)"))
             {
                 PrintReport();
+            }
+
+            EditorGUILayout.Space(10);
+            EditorGUILayout.LabelField("コンポーネント統合", EditorStyles.boldLabel);
+            if (GUILayout.Button("Button + MornUGUIButton → MornUGUIButton に統合", GUILayout.Height(25)))
+            {
+                MergeButtonIntoMornUGUIButton();
             }
         }
 
@@ -765,6 +773,57 @@ namespace MornLib
             }
 
             return string.Join('\n', lines);
+        }
+
+        /// <summary>
+        /// 全 prefab/scene から Button + MornUGUIButton が共存する GameObject を検出し、
+        /// Button の Navigation/Interactable を MornUGUIButton に移してから Button を削除する。
+        /// </summary>
+        private static void MergeButtonIntoMornUGUIButton()
+        {
+            var allPrefabs = AssetDatabase.FindAssets("t:Prefab")
+                .Select(AssetDatabase.GUIDToAssetPath)
+                .ToList();
+            var allScenes = AssetDatabase.FindAssets("t:Scene")
+                .Select(AssetDatabase.GUIDToAssetPath)
+                .ToList();
+
+            var mergedCount = 0;
+
+            // Prefab
+            foreach (var path in allPrefabs)
+            {
+                var root = PrefabUtility.LoadPrefabContents(path);
+                var modified = false;
+                foreach (var mornButton in root.GetComponentsInChildren<MornUGUIButton>(true))
+                {
+                    var button = mornButton.GetComponent<Button>();
+                    if (button == null)
+                    {
+                        continue;
+                    }
+
+                    // Button の Navigation を MornUGUIButton にコピー
+                    mornButton.navigation = button.navigation;
+                    mornButton.interactable = button.interactable;
+                    mornButton.targetGraphic = button.targetGraphic;
+                    UnityEngine.Object.DestroyImmediate(button);
+                    modified = true;
+                    mergedCount++;
+                    Debug.Log($"[Morn Migration] {path}: Button → MornUGUIButton 統合 ({mornButton.name})");
+                }
+
+                if (modified)
+                {
+                    PrefabUtility.SaveAsPrefabAsset(root, path);
+                }
+
+                PrefabUtility.UnloadPrefabContents(root);
+            }
+
+            Debug.Log($"[Morn Migration] Button 統合完了: {mergedCount} 件");
+            AssetDatabase.SaveAssets();
+            AssetDatabase.Refresh();
         }
     }
 }

@@ -1,7 +1,9 @@
 {
     "name": "MornGarage.Migration",
     "rootNamespace": "MornLib",
-    "references": [],
+    "references": [
+        "GUID:3590e33c2330941199195c6e03744566"
+    ],
     "includePlatforms": [
         "Editor"
     ],
