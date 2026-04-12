@@ -756,7 +756,8 @@ namespace MornLib
             for (var i = 0; i < lines.Length; i++)
             {
                 var trimmed = lines[i].TrimStart();
-                if (trimmed.StartsWith("Button:") && trimmed.Contains("{fileID:"))
+                // YAML リスト項目: "- Button: {fileID:...}" または "Button: {fileID:...}"
+                if ((trimmed.StartsWith("Button:") || trimmed.StartsWith("- Button:")) && trimmed.Contains("{fileID:"))
                 {
                     lines[i] = lines[i].Replace("Button:", "Target:");
                     Debug.Log($"[Morn Migration] LinkModule フィールドリネーム: Button → Target (line {i + 1})");
