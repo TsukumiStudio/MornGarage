@@ -871,10 +871,18 @@ namespace MornLib
                     count++;
                 }
 
-                if (count > 0)
+                // Missing script チェック
+                var hasMissing = root.GetComponentsInChildren<Component>(true)
+                    .Any(c => c == null);
+
+                if (count > 0 && !hasMissing)
                 {
                     PrefabUtility.SaveAsPrefabAsset(root, path);
                     Debug.Log($"[Morn Migration] {path}: Button → MornUGUIButton 統合 ({count}件)");
+                }
+                else if (hasMissing)
+                {
+                    Debug.LogWarning($"[Morn Migration] {path}: Missing script があるため保存をスキップしました。先に Missing script を解消してください。");
                 }
 
                 PrefabUtility.UnloadPrefabContents(root);
