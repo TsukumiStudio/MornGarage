@@ -225,7 +225,7 @@ namespace MornLib
                         }
 
                         // LinkModule フィールド不整合検出 (ButtonModule→LinkModule リネーム)
-                        if (content.Contains(LinkModuleGuid) && content.Contains("_buttonStateLinkSets"))
+                        if (content.Contains("_buttonStateLinkSets"))
                         {
                             _fieldFixResults.Add(new ScanResult
                             {
