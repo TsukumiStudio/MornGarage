@@ -1791,70 +1791,133 @@ namespace MornLib
         }
 
         /// <summary>
-        /// 指定ファイル内の Button stripped 孤立参照を MornUGUIButton に差し替える。
-        /// 解決できない孤立参照はそのまま残す。全部解決できた場合のみ true。
+        /// PrefabUtility 経由で prefab をロードし、_autoFocusModule._target の missing 参照に
+        /// MornUGUIButton を代入して保存する。
+        /// 候補が一意に定まらない場合(hierarchy 内に MornUGUIButton が複数ある場合)はスキップする。
+        /// Unity が stripped エントリの fileID を自動生成するので安全。
+        /// scene ファイルは現在未対応。
         /// </summary>
         private static bool FixStrippedOrphansSingle(string assetPath)
         {
-            var fullPath = Path.Combine(
-                Directory.GetParent(Application.dataPath)!.FullName, assetPath);
+            if (!assetPath.EndsWith(".prefab"))
+            {
+                Debug.LogWarning($"[Morn Migration] {assetPath}: scene は未対応。手動で修正してください");
+                return false;
+            }
+
+            var root = PrefabUtility.LoadPrefabContents(assetPath);
+            if (root == null)
+            {
+                Debug.LogError($"[Morn Migration] {assetPath}: ロード失敗");
+                return false;
+            }
 
             try
             {
-                var content = File.ReadAllText(fullPath);
-                var lines = content.Split('\n').ToList();
-                var orphans = ExtractStrippedButtonOrphans(content);
-                if (orphans.Count == 0)
+                // hierarchy 内の全 MornUGUIButton を収集
+                var allButtons = new List<MonoBehaviour>();
+                foreach (var mb in root.GetComponentsInChildren<MonoBehaviour>(true))
                 {
-                    return true;
-                }
-
-                var modified = false;
-                var allResolved = true;
-                // 逆順処理: 行番号のズレを避ける
-                for (var idx = orphans.Count - 1; idx >= 0; idx--)
-                {
-                    var o = orphans[idx];
-                    var target = ResolveMornUGUIButtonTarget(o.SrcFileId, o.SrcGuid);
-                    if (target == null)
+                    if (mb == null)
                     {
-                        allResolved = false;
-                        Debug.LogWarning($"[Morn Migration] {assetPath}: stripped {o.StrippedFileId} の差し替え先が見つからず (src fileID={o.SrcFileId}, guid={o.SrcGuid})");
                         continue;
                     }
 
-                    // ブロック内の m_Script guid と m_CorrespondingSourceObject を書き換え
-                    for (var j = o.BlockStart; j <= o.BlockEnd && j < lines.Count; j++)
+                    var script = MonoScript.FromMonoBehaviour(mb);
+                    if (script == null)
                     {
-                        if (lines[j].Contains(UnityButtonGuid) && lines[j].TrimStart().StartsWith("m_Script:"))
+                        continue;
+                    }
+
+                    var scriptPath = AssetDatabase.GetAssetPath(script);
+                    if (string.IsNullOrEmpty(scriptPath))
+                    {
+                        continue;
+                    }
+
+                    if (AssetDatabase.AssetPathToGUID(scriptPath) == MornUGUIButtonGuid)
+                    {
+                        allButtons.Add(mb);
+                    }
+                }
+
+                var fixedCount = 0;
+                var skippedCount = 0;
+                var modifiedMonoBehaviours = new HashSet<MonoBehaviour>();
+
+                foreach (var mb in root.GetComponentsInChildren<MonoBehaviour>(true))
+                {
+                    if (mb == null)
+                    {
+                        continue;
+                    }
+
+                    var so = new SerializedObject(mb);
+                    var iter = so.GetIterator();
+                    var changed = false;
+                    while (iter.NextVisible(true))
+                    {
+                        if (iter.propertyType != SerializedPropertyType.ObjectReference)
                         {
-                            lines[j] = lines[j].Replace(UnityButtonGuid, MornUGUIButtonGuid);
+                            continue;
                         }
 
-                        if (lines[j].TrimStart().StartsWith("m_CorrespondingSourceObject:"))
+                        if (!iter.propertyPath.EndsWith("_autoFocusModule._target") &&
+                            !iter.propertyPath.EndsWith("autoFocusModule._target"))
                         {
-                            lines[j] = System.Text.RegularExpressions.Regex.Replace(
-                                lines[j],
-                                @"fileID: \d+, guid: [0-9a-f]{32}",
-                                $"fileID: {target.Value.fileId}, guid: {target.Value.guid}");
+                            continue;
+                        }
+
+                        if (iter.objectReferenceValue != null)
+                        {
+                            continue;
+                        }
+
+                        if (iter.objectReferenceInstanceIDValue == 0)
+                        {
+                            continue;
+                        }
+
+                        // missing 参照
+                        if (allButtons.Count == 1)
+                        {
+                            iter.objectReferenceValue = allButtons[0];
+                            changed = true;
+                            fixedCount++;
+                        }
+                        else
+                        {
+                            skippedCount++;
                         }
                     }
 
-                    modified = true;
-                    Debug.Log($"[Morn Migration] {assetPath}: stripped {o.StrippedFileId} → MornUGUIButton ({target.Value.fileId}, {target.Value.guid.Substring(0, 8)}...)");
+                    if (changed)
+                    {
+                        so.ApplyModifiedPropertiesWithoutUndo();
+                        modifiedMonoBehaviours.Add(mb);
+                    }
                 }
 
-                if (modified)
+                if (fixedCount > 0)
                 {
-                    File.WriteAllText(fullPath, string.Join('\n', lines));
+                    PrefabUtility.SaveAsPrefabAsset(root, assetPath);
+                    Debug.Log($"[Morn Migration] {assetPath}: {fixedCount}件修正、{skippedCount}件スキップ (候補{allButtons.Count}個で一意でない)");
+                }
+                else if (skippedCount > 0)
+                {
+                    Debug.LogWarning($"[Morn Migration] {assetPath}: {skippedCount}件の missing を自動修正できず (候補{allButtons.Count}個)。手動で Inspector から設定してください");
                 }
 
-                return allResolved;
+                return skippedCount == 0;
             }
             catch (Exception e)
             {
                 Debug.LogError($"[Morn Migration] {assetPath} の修正に失敗: {e.Message}");
                 return false;
+            }
+            finally
+            {
+                PrefabUtility.UnloadPrefabContents(root);
             }
         }
 
