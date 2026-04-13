@@ -1814,7 +1814,7 @@ namespace MornLib
 
             try
             {
-                // hierarchy 内の全 MornUGUIButton を収集
+                // hierarchy 内の全 MornUGUIButton を収集 (script guid 判定)
                 var allButtons = new List<MonoBehaviour>();
                 foreach (var mb in root.GetComponentsInChildren<MonoBehaviour>(true))
                 {
@@ -1841,9 +1841,34 @@ namespace MornLib
                     }
                 }
 
+                // outermost PrefabInstance 別に MornUGUIButton をグルーピング
+                // GlobalObjectId.targetPrefabId (runtime値) ↔ YAML の m_PrefabInstance fileID は一致する
+                var prefabInstanceToButton = new Dictionary<ulong, MonoBehaviour>();
+                foreach (var btn in allButtons)
+                {
+                    var btnGo = btn.gameObject;
+                    // ネスト深い場合は outermost を辿る
+                    var outer = btnGo;
+                    while (outer != null && !PrefabUtility.IsOutermostPrefabInstanceRoot(outer))
+                    {
+                        var parent = outer.transform.parent;
+                        outer = parent != null ? parent.gameObject : null;
+                    }
+
+                    if (outer == null)
+                    {
+                        continue;
+                    }
+
+                    var gid = GlobalObjectId.GetGlobalObjectIdSlow(outer);
+                    if (gid.targetPrefabId != 0 && !prefabInstanceToButton.ContainsKey(gid.targetPrefabId))
+                    {
+                        prefabInstanceToButton[gid.targetPrefabId] = btn;
+                    }
+                }
+
                 var fixedCount = 0;
                 var skippedCount = 0;
-                var modifiedMonoBehaviours = new HashSet<MonoBehaviour>();
 
                 foreach (var mb in root.GetComponentsInChildren<MonoBehaviour>(true))
                 {
@@ -1878,34 +1903,46 @@ namespace MornLib
                             continue;
                         }
 
-                        // missing 参照
-                        if (allButtons.Count == 1)
+                        // missing ref: GlobalObjectId から targetPrefabId を取得して対応 Button を探す
+                        MonoBehaviour target = null;
+                        var missingGid = GlobalObjectId.GetGlobalObjectIdSlow(iter.objectReferenceInstanceIDValue);
+                        if (missingGid.targetPrefabId != 0 &&
+                            prefabInstanceToButton.TryGetValue(missingGid.targetPrefabId, out var matched))
                         {
-                            iter.objectReferenceValue = allButtons[0];
+                            target = matched;
+                        }
+                        else if (allButtons.Count == 1)
+                        {
+                            target = allButtons[0];
+                        }
+
+                        if (target != null)
+                        {
+                            iter.objectReferenceValue = target;
                             changed = true;
                             fixedCount++;
                         }
                         else
                         {
                             skippedCount++;
+                            Debug.LogWarning($"[Morn Migration] {assetPath}: {iter.propertyPath} missing (targetPrefabId={missingGid.targetPrefabId}, 候補Button={allButtons.Count}個)");
                         }
                     }
 
                     if (changed)
                     {
                         so.ApplyModifiedPropertiesWithoutUndo();
-                        modifiedMonoBehaviours.Add(mb);
                     }
                 }
 
                 if (fixedCount > 0)
                 {
                     PrefabUtility.SaveAsPrefabAsset(root, assetPath);
-                    Debug.Log($"[Morn Migration] {assetPath}: {fixedCount}件修正、{skippedCount}件スキップ (候補{allButtons.Count}個で一意でない)");
+                    Debug.Log($"[Morn Migration] {assetPath}: {fixedCount}件修正、{skippedCount}件スキップ");
                 }
                 else if (skippedCount > 0)
                 {
-                    Debug.LogWarning($"[Morn Migration] {assetPath}: {skippedCount}件の missing を自動修正できず (候補{allButtons.Count}個)。手動で Inspector から設定してください");
+                    Debug.LogWarning($"[Morn Migration] {assetPath}: {skippedCount}件の missing を自動修正できず。手動で Inspector から設定してください");
                 }
 
                 return skippedCount == 0;
