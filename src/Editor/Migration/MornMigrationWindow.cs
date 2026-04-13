@@ -23,7 +23,8 @@ namespace MornLib
             new SubStateFieldMigrationStep(),
             new WaitTimeFieldMigrationStep(),
             new ButtonMergeMigrationStep(),
-            new StrippedOrphanMigrationStep(),
+            new AutoFocusTargetMigrationStep(),
+            new CancelTargetMigrationStep(),
             new CsReplaceMigrationStep(),
             new MissingScriptMigrationStep(),
         };
