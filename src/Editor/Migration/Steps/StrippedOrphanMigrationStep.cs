@@ -270,7 +270,9 @@ namespace MornLib
                         }
 
                         if (!iter.propertyPath.EndsWith("_autoFocusModule._target") &&
-                            !iter.propertyPath.EndsWith("autoFocusModule._target"))
+                            !iter.propertyPath.EndsWith("autoFocusModule._target") &&
+                            !iter.propertyPath.EndsWith("_cancelModule._target") &&
+                            !iter.propertyPath.EndsWith("cancelModule._target"))
                         {
                             continue;
                         }
