@@ -313,12 +313,16 @@ namespace MornLib
                         }
 
                         // MornUGUIControlState フィールド不整合検出
-                        if (content.Contains("_buttonStateLinkSets") || content.Contains("_buttonModule:") || content.Contains("_autoFocusTarget:"))
+                        if (content.Contains("_buttonStateLinkSets") ||
+                            content.Contains("_buttonModule:") ||
+                            content.Contains("_autoFocusTarget:") ||
+                            content.Contains("_cancelTarget:") ||
+                            HasIsActiveInAutoFocusOrCancelModule(content))
                         {
                             _fieldFixResults.Add(new ScanResult
                             {
                                 AssetPath = path,
-                                Details = "ControlState: _buttonModule→_linkModule, フィールドリネーム",
+                                Details = "ControlState: フィールドリネーム / _isActive 削除",
                             });
                         }
 
@@ -1105,6 +1109,22 @@ namespace MornLib
                 content = content.Replace("_autoFocusTarget:", "_target:");
                 modified = true;
                 Debug.Log("[Morn Migration] ControlState: _autoFocusTarget → _target");
+            }
+
+            // _cancelTarget → _target (CancelModule 内)
+            if (content.Contains("_cancelTarget:"))
+            {
+                content = content.Replace("_cancelTarget:", "_target:");
+                modified = true;
+                Debug.Log("[Morn Migration] ControlState: _cancelTarget → _target");
+            }
+
+            // AutoFocus/Cancel Module の _isActive フラグを削除 (null 判定ベースに変更)
+            var removed = RemoveIsActiveFromModules(ref content);
+            if (removed > 0)
+            {
+                modified = true;
+                Debug.Log($"[Morn Migration] ControlState: _autoFocusModule/_cancelModule の _isActive を {removed} 件削除");
             }
 
             // Button: → Target: (LinkSet 内)
@@ -1985,6 +2005,166 @@ namespace MornLib
             {
                 PrefabUtility.UnloadPrefabContents(root);
             }
+        }
+
+        /// <summary>
+        /// YAML 内で `_autoFocusModule:` または `_cancelModule:` の子に `_isActive:` があるか、
+        /// もしくは PrefabInstance modifications に該当パスがあるかを検出。
+        /// </summary>
+        private static bool HasIsActiveInAutoFocusOrCancelModule(string content)
+        {
+            if (content.Contains("_autoFocusModule._isActive") || content.Contains("_cancelModule._isActive"))
+            {
+                return true;
+            }
+
+            var lines = content.Split('\n');
+            for (var i = 0; i < lines.Length; i++)
+            {
+                var trimmed = lines[i].TrimStart();
+                if (trimmed != "_autoFocusModule:" && trimmed != "_cancelModule:")
+                {
+                    continue;
+                }
+
+                var moduleIndent = lines[i].Length - trimmed.Length;
+                for (var j = i + 1; j < lines.Length; j++)
+                {
+                    if (string.IsNullOrWhiteSpace(lines[j]))
+                    {
+                        continue;
+                    }
+
+                    var childTrimmed = lines[j].TrimStart();
+                    var childIndent = lines[j].Length - childTrimmed.Length;
+                    if (childIndent <= moduleIndent)
+                    {
+                        break;
+                    }
+
+                    if (childTrimmed.StartsWith("_isActive:"))
+                    {
+                        return true;
+                    }
+                }
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// `_autoFocusModule:` / `_cancelModule:` ブロックと PrefabInstance の modifications から _isActive を削除。
+        /// 返り値は削除件数。
+        /// </summary>
+        private static int RemoveIsActiveFromModules(ref string content)
+        {
+            var lines = content.Split('\n').ToList();
+            var removed = 0;
+            var targetModules = new[] { "_autoFocusModule:", "_cancelModule:" };
+
+            // 1. Module ブロック内の _isActive 行を削除
+            for (var i = 0; i < lines.Count; i++)
+            {
+                var trimmed = lines[i].TrimStart();
+                var isModuleStart = false;
+                foreach (var m in targetModules)
+                {
+                    if (trimmed == m || trimmed.StartsWith(m))
+                    {
+                        isModuleStart = true;
+                        break;
+                    }
+                }
+
+                if (!isModuleStart)
+                {
+                    continue;
+                }
+
+                var moduleIndent = lines[i].Length - lines[i].TrimStart().Length;
+                // 子フィールドは moduleIndent より深いインデント
+                for (var j = i + 1; j < lines.Count; j++)
+                {
+                    var childTrimmed = lines[j].TrimStart();
+                    if (string.IsNullOrWhiteSpace(lines[j]))
+                    {
+                        continue;
+                    }
+
+                    var childIndent = lines[j].Length - childTrimmed.Length;
+                    if (childIndent <= moduleIndent)
+                    {
+                        break;
+                    }
+
+                    if (childTrimmed.StartsWith("_isActive:"))
+                    {
+                        lines.RemoveAt(j);
+                        removed++;
+                        j--;
+                    }
+                }
+            }
+
+            // 2. PrefabInstance の m_Modifications 内で _autoFocusModule._isActive / _cancelModule._isActive を削除
+            //    "- target: {...}\n  propertyPath: ..._isActive\n  value: ...\n  objectReference: ..." を 4 行で削除
+            for (var i = 0; i < lines.Count; i++)
+            {
+                if (!lines[i].TrimStart().StartsWith("- target:"))
+                {
+                    continue;
+                }
+
+                // 次の "propertyPath:" 行を探す (通常は i+1)
+                if (i + 1 >= lines.Count)
+                {
+                    continue;
+                }
+
+                var pathLine = lines[i + 1].TrimStart();
+                if (!pathLine.StartsWith("propertyPath:"))
+                {
+                    continue;
+                }
+
+                var isAutoFocus = pathLine.Contains("_autoFocusModule._isActive") ||
+                                  pathLine.Contains(".autoFocusModule._isActive");
+                var isCancel = pathLine.Contains("_cancelModule._isActive") ||
+                               pathLine.Contains(".cancelModule._isActive");
+                if (!isAutoFocus && !isCancel)
+                {
+                    continue;
+                }
+
+                // 対応する modification の行範囲を特定 (次の "- target:" または "m_RemovedComponents:" などまで)
+                var endLine = i + 1;
+                for (var j = i + 1; j < lines.Count; j++)
+                {
+                    var t = lines[j].TrimStart();
+                    if (j > i && (t.StartsWith("- target:") ||
+                                  t.StartsWith("m_RemovedComponents:") ||
+                                  t.StartsWith("m_RemovedGameObjects:") ||
+                                  t.StartsWith("m_AddedGameObjects:") ||
+                                  t.StartsWith("m_AddedComponents:")))
+                    {
+                        endLine = j - 1;
+                        break;
+                    }
+
+                    endLine = j;
+                }
+
+                lines.RemoveRange(i, endLine - i + 1);
+                removed++;
+                i--;
+            }
+
+            if (removed > 0)
+            {
+                content = string.Join('\n', lines);
+            }
+
+            return removed;
         }
 
         /// <summary>
