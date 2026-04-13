@@ -1814,7 +1814,19 @@ namespace MornLib
 
             try
             {
-                // hierarchy 内の全 MornUGUIButton を収集 (script guid 判定)
+                // 1. YAML を事前解析: orphan stripped エントリ → m_PrefabInstance, 各 MonoBehaviour の _target 参照順序
+                var fullPath = Path.Combine(
+                    Directory.GetParent(Application.dataPath)!.FullName, assetPath);
+                var yamlContent = File.ReadAllText(fullPath);
+                var yamlLines = yamlContent.Split('\n');
+                var orphanToPrefabInstance = new Dictionary<ulong, ulong>();
+                ParseOrphanStrippedEntries(yamlLines, orphanToPrefabInstance);
+
+                // MonoBehaviour fileID → 順番に並んだ orphan fileID リスト
+                var perMonoBehaviour = new Dictionary<ulong, List<ulong>>();
+                ParseTargetReferences(yamlLines, orphanToPrefabInstance, perMonoBehaviour);
+
+                // 2. hierarchy 内の全 MornUGUIButton を収集
                 var allButtons = new List<MonoBehaviour>();
                 foreach (var mb in root.GetComponentsInChildren<MonoBehaviour>(true))
                 {
@@ -1841,14 +1853,11 @@ namespace MornLib
                     }
                 }
 
-                // outermost PrefabInstance 別に MornUGUIButton をグルーピング
-                // GlobalObjectId.targetPrefabId (runtime値) ↔ YAML の m_PrefabInstance fileID は一致する
+                // 3. outermost PrefabInstance root の targetPrefabId → MornUGUIButton をマップ化
                 var prefabInstanceToButton = new Dictionary<ulong, MonoBehaviour>();
                 foreach (var btn in allButtons)
                 {
-                    var btnGo = btn.gameObject;
-                    // ネスト深い場合は outermost を辿る
-                    var outer = btnGo;
+                    var outer = btn.gameObject;
                     while (outer != null && !PrefabUtility.IsOutermostPrefabInstanceRoot(outer))
                     {
                         var parent = outer.transform.parent;
@@ -1870,6 +1879,7 @@ namespace MornLib
                 var fixedCount = 0;
                 var skippedCount = 0;
 
+                // 4. 各 MonoBehaviour ごとに _target missing 参照を順序で YAML と突き合わせて代入
                 foreach (var mb in root.GetComponentsInChildren<MonoBehaviour>(true))
                 {
                     if (mb == null)
@@ -1877,8 +1887,16 @@ namespace MornLib
                         continue;
                     }
 
+                    var mbGid = GlobalObjectId.GetGlobalObjectIdSlow(mb);
+                    var mbFileId = mbGid.targetObjectId;
+                    if (!perMonoBehaviour.TryGetValue(mbFileId, out var yamlOrphans))
+                    {
+                        continue;
+                    }
+
                     var so = new SerializedObject(mb);
                     var iter = so.GetIterator();
+                    var missingIdx = 0;
                     var changed = false;
                     while (iter.NextVisible(true))
                     {
@@ -1903,17 +1921,26 @@ namespace MornLib
                             continue;
                         }
 
-                        // missing ref: GlobalObjectId から targetPrefabId を取得して対応 Button を探す
+                        // YAML orphan を index で引いて m_PrefabInstance 経由で Button を特定
                         MonoBehaviour target = null;
-                        var missingGid = GlobalObjectId.GetGlobalObjectIdSlow(iter.objectReferenceInstanceIDValue);
-                        if (missingGid.targetPrefabId != 0 &&
-                            prefabInstanceToButton.TryGetValue(missingGid.targetPrefabId, out var matched))
+                        var diagnostic = "";
+                        if (missingIdx < yamlOrphans.Count)
                         {
-                            target = matched;
+                            var orphanFid = yamlOrphans[missingIdx];
+                            if (orphanToPrefabInstance.TryGetValue(orphanFid, out var prefInstId) &&
+                                prefabInstanceToButton.TryGetValue(prefInstId, out var matched))
+                            {
+                                target = matched;
+                                diagnostic = $"orphan={orphanFid} prefInst={prefInstId}";
+                            }
+                            else
+                            {
+                                diagnostic = $"orphan={orphanFid} 未マッチ (prefInst not in map)";
+                            }
                         }
-                        else if (allButtons.Count == 1)
+                        else
                         {
-                            target = allButtons[0];
+                            diagnostic = $"YAML の orphan リスト({yamlOrphans.Count})とズレ (idx={missingIdx})";
                         }
 
                         if (target != null)
@@ -1925,8 +1952,10 @@ namespace MornLib
                         else
                         {
                             skippedCount++;
-                            Debug.LogWarning($"[Morn Migration] {assetPath}: {iter.propertyPath} missing (targetPrefabId={missingGid.targetPrefabId}, 候補Button={allButtons.Count}個)");
+                            Debug.LogWarning($"[Morn Migration] {assetPath}: MB fileId={mbFileId} {iter.propertyPath}: {diagnostic}");
                         }
+
+                        missingIdx++;
                     }
 
                     if (changed)
@@ -1955,6 +1984,149 @@ namespace MornLib
             finally
             {
                 PrefabUtility.UnloadPrefabContents(root);
+            }
+        }
+
+        /// <summary>
+        /// YAML から UnityEngine.UI.Button の stripped 孤立エントリを抽出し、fileID → m_PrefabInstance fileID を返す。
+        /// </summary>
+        private static void ParseOrphanStrippedEntries(string[] lines, Dictionary<ulong, ulong> result)
+        {
+            for (var i = 0; i < lines.Length; i++)
+            {
+                if (!lines[i].StartsWith("--- !u!114 &") || !lines[i].Contains("stripped"))
+                {
+                    continue;
+                }
+
+                var fidStart = "--- !u!114 &".Length;
+                var fidEnd = lines[i].IndexOf(' ', fidStart);
+                if (fidEnd < 0)
+                {
+                    continue;
+                }
+
+                if (!ulong.TryParse(lines[i].Substring(fidStart, fidEnd - fidStart), out var strippedFid))
+                {
+                    continue;
+                }
+
+                var scriptGuid = "";
+                ulong prefInst = 0;
+                for (var j = i + 1; j < lines.Length; j++)
+                {
+                    if (lines[j].StartsWith("--- "))
+                    {
+                        break;
+                    }
+
+                    var trimmed = lines[j].TrimStart();
+                    if (trimmed.StartsWith("m_PrefabInstance:") && trimmed.Contains("fileID: "))
+                    {
+                        var gs = trimmed.IndexOf("fileID: ", StringComparison.Ordinal) + 8;
+                        var ge = trimmed.IndexOf('}', gs);
+                        if (ge > gs)
+                        {
+                            ulong.TryParse(trimmed.Substring(gs, ge - gs), out prefInst);
+                        }
+                    }
+
+                    if (trimmed.StartsWith("m_Script:") && trimmed.Contains("guid: "))
+                    {
+                        var gs = trimmed.IndexOf("guid: ", StringComparison.Ordinal) + 6;
+                        var ge = trimmed.IndexOf(',', gs);
+                        if (ge > gs)
+                        {
+                            scriptGuid = trimmed.Substring(gs, ge - gs);
+                        }
+                    }
+                }
+
+                if (scriptGuid == UnityButtonGuid && prefInst != 0)
+                {
+                    result[strippedFid] = prefInst;
+                }
+            }
+        }
+
+        /// <summary>
+        /// 各 MonoBehaviour ブロック内の `_target: {fileID: X}` 参照を走査し、X が orphan に含まれれば順序付きリストに追加。
+        /// </summary>
+        private static void ParseTargetReferences(
+            string[] lines,
+            Dictionary<ulong, ulong> orphanSet,
+            Dictionary<ulong, List<ulong>> result)
+        {
+            ulong currentMbFileId = 0;
+            for (var i = 0; i < lines.Length; i++)
+            {
+                var line = lines[i];
+                if (line.StartsWith("--- !u!114 &"))
+                {
+                    if (line.Contains("stripped"))
+                    {
+                        currentMbFileId = 0;
+                    }
+                    else
+                    {
+                        var fidStart = "--- !u!114 &".Length;
+                        var fidEnd = line.Length;
+                        for (var k = fidStart; k < line.Length; k++)
+                        {
+                            if (!char.IsDigit(line[k]))
+                            {
+                                fidEnd = k;
+                                break;
+                            }
+                        }
+
+                        ulong.TryParse(line.Substring(fidStart, fidEnd - fidStart), out currentMbFileId);
+                    }
+
+                    continue;
+                }
+
+                if (line.StartsWith("--- "))
+                {
+                    currentMbFileId = 0;
+                    continue;
+                }
+
+                if (currentMbFileId == 0)
+                {
+                    continue;
+                }
+
+                var trimmed = line.TrimStart();
+                if (!trimmed.StartsWith("_target:") || !trimmed.Contains("fileID: "))
+                {
+                    continue;
+                }
+
+                var gs = trimmed.IndexOf("fileID: ", StringComparison.Ordinal) + 8;
+                var ge = trimmed.IndexOf('}', gs);
+                if (ge <= gs)
+                {
+                    continue;
+                }
+
+                if (!ulong.TryParse(trimmed.Substring(gs, ge - gs), out var targetFid))
+                {
+                    continue;
+                }
+
+                if (!orphanSet.ContainsKey(targetFid))
+                {
+                    continue;
+                }
+
+                if (!result.TryGetValue(currentMbFileId, out var list))
+                {
+                    list = new List<ulong>();
+                    result[currentMbFileId] = list;
+                }
+
+                list.Add(targetFid);
             }
         }
 
