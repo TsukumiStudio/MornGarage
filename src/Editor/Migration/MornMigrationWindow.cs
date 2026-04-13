@@ -31,6 +31,7 @@ namespace MornLib
         // ========== フィールドリネーム ==========
         private static readonly string SubStateNewGuid = "aac67bf328824705a55354ac6d26608c";
         private static readonly string LinkModuleGuid = "8be286109e114b849574ebd8390b6191";
+        private static readonly string WaitTimeStateGuid = "178f13c9c785bb341b8537958dc16138";
 
         // ========== 削除された GUID (対応先なし) ==========
         private static readonly Dictionary<string, string> DeletedGuids = new()
@@ -51,8 +52,10 @@ namespace MornLib
         private readonly List<ScanResult> _deletedResults = new();
         private readonly List<ScanResult> _csResults = new();
         private readonly List<ScanResult> _fieldFixResults = new();
+        private readonly List<ScanResult> _waitTimeFixResults = new();
         private readonly List<ScanResult> _mergeResults = new();
         private readonly List<ScanResult> _missingScriptResults = new();
+        private readonly List<ScanResult> _strippedOrphanResults = new();
         private Vector2 _scrollPos;
         private bool _scanPrefabs = true;
         private bool _scanScenes = true;
@@ -61,8 +64,10 @@ namespace MornLib
         private bool _foldDeleted = true;
         private bool _foldCs = true;
         private bool _foldFieldFix = true;
+        private bool _foldWaitTimeFix = true;
         private bool _foldMerge = true;
         private bool _foldMissingScript = true;
+        private bool _foldStrippedOrphan = true;
 
         private struct ScanResult
         {
@@ -118,11 +123,23 @@ namespace MornLib
                 $"SubState フィールド不整合 ({_fieldFixResults.Count}件)",
                 _fieldFixResults);
 
+            // WaitTimeState 不整合
+            DrawWaitTimeFixSection(
+                ref _foldWaitTimeFix,
+                $"WaitTimeState 不整合 ({_waitTimeFixResults.Count}件)",
+                _waitTimeFixResults);
+
             // コンポーネント統合
             DrawMergeSection(
                 ref _foldMerge,
                 $"Button + MornUGUIButton 共存 ({_mergeResults.Count}件)",
                 _mergeResults);
+
+            // Button stripped 孤立参照
+            DrawStrippedOrphanSection(
+                ref _foldStrippedOrphan,
+                $"Button stripped 孤立参照 ({_strippedOrphanResults.Count}件)",
+                _strippedOrphanResults);
 
             // C# 変更
             DrawSection(
@@ -172,8 +189,11 @@ namespace MornLib
             _deletedResults.Clear();
             _csResults.Clear();
             _fieldFixResults.Clear();
+            _waitTimeFixResults.Clear();
             _mergeResults.Clear();
             _missingScriptResults.Clear();
+            _strippedOrphanResults.Clear();
+            _resolveCache.Clear();
 
             // プロジェクト全体の script GUID を収集 (Assets + Packages + Library/PackageCache)
             var knownScriptGuids = new HashSet<string>();
@@ -302,6 +322,16 @@ namespace MornLib
                             });
                         }
 
+                        // WaitTimeState FlexibleField<float> → float 検出
+                        if (content.Contains($"guid: {WaitTimeStateGuid}") && HasWaitTimeFlexibleField(content))
+                        {
+                            _waitTimeFixResults.Add(new ScanResult
+                            {
+                                AssetPath = path,
+                                Details = "WaitTimeState: _waitDuration FlexibleField<float> → float",
+                            });
+                        }
+
                         // Button + MornUGUIButton 共存検出 (stripped は除外)
                         if (HasNonStrippedButton(content) && content.Contains(MornUGUIButtonGuid))
                         {
@@ -309,6 +339,17 @@ namespace MornLib
                             {
                                 AssetPath = path,
                                 Details = "Button + MornUGUIButton 共存 → 統合可能",
+                            });
+                        }
+
+                        // Button stripped 孤立参照検出
+                        var orphanCount = CountStrippedButtonOrphans(content, out var resolvableCount);
+                        if (orphanCount > 0)
+                        {
+                            _strippedOrphanResults.Add(new ScanResult
+                            {
+                                AssetPath = path,
+                                Details = $"{orphanCount}件の孤立参照 ({resolvableCount}件解決可能)",
                             });
                         }
 
@@ -819,6 +860,78 @@ namespace MornLib
             EditorGUI.indentLevel--;
         }
 
+        private void DrawWaitTimeFixSection(
+            ref bool foldout,
+            string title,
+            List<ScanResult> results)
+        {
+            var originalColor = GUI.backgroundColor;
+            GUI.backgroundColor = new Color(1f, 0.6f, 0.8f);
+            foldout = EditorGUILayout.Foldout(foldout, title, true, EditorStyles.foldoutHeader);
+            GUI.backgroundColor = originalColor;
+
+            if (!foldout)
+            {
+                return;
+            }
+
+            if (results.Count == 0)
+            {
+                EditorGUILayout.LabelField("  (なし)", EditorStyles.miniLabel);
+                return;
+            }
+
+            EditorGUI.indentLevel++;
+            for (var i = results.Count - 1; i >= 0; i--)
+            {
+                var result = results[i];
+                using (new EditorGUILayout.HorizontalScope())
+                {
+                    if (GUILayout.Button(
+                            Path.GetFileName(result.AssetPath),
+                            EditorStyles.linkLabel,
+                            GUILayout.ExpandWidth(false)))
+                    {
+                        var obj = AssetDatabase.LoadAssetAtPath<UnityEngine.Object>(result.AssetPath);
+                        if (obj != null)
+                        {
+                            EditorGUIUtility.PingObject(obj);
+                            Selection.activeObject = obj;
+                        }
+                    }
+
+                    EditorGUILayout.LabelField(result.Details, EditorStyles.miniLabel);
+
+                    if (GUILayout.Button("修正", GUILayout.Width(40)))
+                    {
+                        FixWaitTimeFieldInFile(result.AssetPath);
+                        results.RemoveAt(i);
+                    }
+                }
+            }
+
+            EditorGUI.indentLevel--;
+        }
+
+        private static void FixWaitTimeFieldInFile(string assetPath)
+        {
+            var fullPath = Path.Combine(
+                Directory.GetParent(Application.dataPath)!.FullName,
+                assetPath);
+
+            try
+            {
+                var content = File.ReadAllText(fullPath);
+                content = FixWaitTimeField(content);
+                File.WriteAllText(fullPath, content);
+                Debug.Log($"[Morn Migration] {assetPath}: WaitTimeState 修正完了");
+            }
+            catch (Exception e)
+            {
+                Debug.LogError($"[Morn Migration] {assetPath} の WaitTimeState 修正に失敗: {e.Message}");
+            }
+        }
+
         private static void FixSubStateFieldsInFile(string assetPath)
         {
             var fullPath = Path.Combine(
@@ -838,6 +951,115 @@ namespace MornLib
             {
                 Debug.LogError($"[Morn Migration] {assetPath} の修正に失敗: {e.Message}");
             }
+        }
+
+        /// <summary>WaitTimeState の _waitDuration が FlexibleField<float> 形式なら検出</summary>
+        private static bool HasWaitTimeFlexibleField(string content)
+        {
+            var lines = content.Split('\n');
+            for (var i = 0; i < lines.Length; i++)
+            {
+                if (!lines[i].Contains($"guid: {WaitTimeStateGuid}"))
+                {
+                    continue;
+                }
+
+                for (var j = i + 1; j < lines.Length; j++)
+                {
+                    var trimmed = lines[j].TrimStart();
+                    if (trimmed.StartsWith("--- !u!"))
+                    {
+                        break;
+                    }
+
+                    if (trimmed.StartsWith("_waitDuration:"))
+                    {
+                        // FlexibleField なら値が同一行に無く、次行が "_Type:" で始まる
+                        var rest = trimmed.Substring("_waitDuration:".Length).Trim();
+                        if (rest.Length == 0 && j + 1 < lines.Length && lines[j + 1].TrimStart().StartsWith("_Type:"))
+                        {
+                            return true;
+                        }
+
+                        break;
+                    }
+                }
+            }
+
+            return false;
+        }
+
+        /// <summary>WaitTimeState の _waitDuration を FlexibleField 構造から float 値に変換</summary>
+        private static string FixWaitTimeField(string content)
+        {
+            var lines = content.Split('\n').ToList();
+            var modified = false;
+            for (var i = 0; i < lines.Count; i++)
+            {
+                if (!lines[i].Contains($"guid: {WaitTimeStateGuid}"))
+                {
+                    continue;
+                }
+
+                for (var j = i + 1; j < lines.Count; j++)
+                {
+                    var rawLine = lines[j];
+                    var trimmed = rawLine.TrimStart();
+                    if (trimmed.StartsWith("--- !u!"))
+                    {
+                        break;
+                    }
+
+                    if (!trimmed.StartsWith("_waitDuration:"))
+                    {
+                        continue;
+                    }
+
+                    var rest = trimmed.Substring("_waitDuration:".Length).Trim();
+                    if (rest.Length != 0 || j + 1 >= lines.Count || !lines[j + 1].TrimStart().StartsWith("_Type:"))
+                    {
+                        break;
+                    }
+
+                    var indentLength = rawLine.Length - trimmed.Length;
+                    var indent = rawLine.Substring(0, indentLength);
+
+                    var floatValue = "0";
+                    var removeEnd = j + 1;
+                    for (var k = j + 1; k < lines.Count; k++)
+                    {
+                        var kLine = lines[k];
+                        var kTrimmedLocal = kLine.TrimStart();
+                        if (kLine.Length == 0 || kTrimmedLocal.StartsWith("--- !u!"))
+                        {
+                            removeEnd = k;
+                            break;
+                        }
+
+                        var kIndentLen = kLine.Length - kTrimmedLocal.Length;
+                        if (kIndentLen <= indentLength)
+                        {
+                            removeEnd = k;
+                            break;
+                        }
+
+                        if (kIndentLen == indentLength + 2 && kTrimmedLocal.StartsWith("_Value:"))
+                        {
+                            floatValue = kTrimmedLocal.Substring("_Value:".Length).Trim();
+                        }
+
+                        removeEnd = k + 1;
+                    }
+
+                    lines[j] = $"{indent}_waitDuration: {floatValue}";
+                    lines.RemoveRange(j + 1, removeEnd - (j + 1));
+                    modified = true;
+                    Debug.Log($"[Morn Migration] WaitTimeState _waitDuration: FlexibleField<float> → float (value={floatValue})");
+                    break;
+                }
+            }
+
+            return modified ? string.Join('\n', lines) : content;
         }
 
         /// <summary>
@@ -1237,6 +1459,402 @@ namespace MornLib
                     lines.InsertRange(i + 1, fieldLines);
                     return;
                 }
+            }
+        }
+
+        // ========== Button stripped 孤立参照の修正 ==========
+
+        // (srcFileId, srcGuid) → (newFileId, newGuid) のキャッシュ
+        private static readonly Dictionary<(string, string), (string fileId, string guid)?> _resolveCache = new();
+
+        /// <summary>
+        /// 自身の YAML 内 stripped エントリで m_Script が UnityEngine.UI.Button を指しているものをカウント。
+        /// 解決可能(差し替え先 MornUGUIButton が推測できる)な件数も返す。
+        /// </summary>
+        private static int CountStrippedButtonOrphans(string content, out int resolvableCount)
+        {
+            resolvableCount = 0;
+            var orphans = ExtractStrippedButtonOrphans(content);
+            foreach (var o in orphans)
+            {
+                if (ResolveMornUGUIButtonTarget(o.SrcFileId, o.SrcGuid) != null)
+                {
+                    resolvableCount++;
+                }
+            }
+
+            return orphans.Count;
+        }
+
+        private struct StrippedOrphan
+        {
+            public string StrippedFileId;
+            public string SrcFileId;
+            public string SrcGuid;
+            public int BlockStart;
+            public int BlockEnd;
+        }
+
+        /// <summary>YAML 内の Button stripped 孤立エントリを抽出</summary>
+        private static List<StrippedOrphan> ExtractStrippedButtonOrphans(string content)
+        {
+            var result = new List<StrippedOrphan>();
+            var lines = content.Split('\n');
+            for (var i = 0; i < lines.Length; i++)
+            {
+                if (!lines[i].StartsWith("--- !u!114 &") || !lines[i].Contains("stripped"))
+                {
+                    continue;
+                }
+
+                var fileIdStart = "--- !u!114 &".Length;
+                var fileIdEnd = lines[i].IndexOf(' ', fileIdStart);
+                if (fileIdEnd < 0)
+                {
+                    continue;
+                }
+
+                var strippedFileId = lines[i].Substring(fileIdStart, fileIdEnd - fileIdStart);
+
+                var scriptGuid = "";
+                var srcFileId = "";
+                var srcGuid = "";
+                var endLine = lines.Length - 1;
+                for (var j = i + 1; j < lines.Length; j++)
+                {
+                    if (lines[j].StartsWith("--- "))
+                    {
+                        endLine = j - 1;
+                        break;
+                    }
+
+                    var trimmed = lines[j].TrimStart();
+                    if (trimmed.StartsWith("m_CorrespondingSourceObject:") && trimmed.Contains("fileID: "))
+                    {
+                        var fidStart = trimmed.IndexOf("fileID: ", StringComparison.Ordinal) + 8;
+                        var fidEnd = trimmed.IndexOf(',', fidStart);
+                        if (fidEnd > fidStart)
+                        {
+                            srcFileId = trimmed.Substring(fidStart, fidEnd - fidStart);
+                        }
+
+                        var gidStart = trimmed.IndexOf("guid: ", StringComparison.Ordinal);
+                        if (gidStart > 0)
+                        {
+                            gidStart += 6;
+                            var gidEnd = trimmed.IndexOf(',', gidStart);
+                            if (gidEnd > gidStart)
+                            {
+                                srcGuid = trimmed.Substring(gidStart, gidEnd - gidStart);
+                            }
+                        }
+                    }
+
+                    if (trimmed.StartsWith("m_Script:") && trimmed.Contains("guid: "))
+                    {
+                        var gidStart = trimmed.IndexOf("guid: ", StringComparison.Ordinal) + 6;
+                        var gidEnd = trimmed.IndexOf(',', gidStart);
+                        if (gidEnd > gidStart)
+                        {
+                            scriptGuid = trimmed.Substring(gidStart, gidEnd - gidStart);
+                        }
+                    }
+                }
+
+                if (scriptGuid == UnityButtonGuid && !string.IsNullOrEmpty(srcFileId) && !string.IsNullOrEmpty(srcGuid))
+                {
+                    result.Add(new StrippedOrphan
+                    {
+                        StrippedFileId = strippedFileId,
+                        SrcFileId = srcFileId,
+                        SrcGuid = srcGuid,
+                        BlockStart = i,
+                        BlockEnd = endLine,
+                    });
+                }
+            }
+
+            return result;
+        }
+
+        /// <summary>
+        /// 指定 prefab (guid) 内で MornUGUIButton を見つける。見つからない場合は Root PrefabInstance を辿って再帰。
+        /// 複数候補がある場合は Root GameObject 上のものを優先。
+        /// </summary>
+        private static (string fileId, string guid)? ResolveMornUGUIButtonTarget(string srcFileId, string srcGuid)
+        {
+            var key = (srcFileId, srcGuid);
+            if (_resolveCache.TryGetValue(key, out var cached))
+            {
+                return cached;
+            }
+
+            var result = ResolveMornUGUIButtonTargetInternal(srcGuid, new HashSet<string>());
+            _resolveCache[key] = result;
+            return result;
+        }
+
+        private static (string fileId, string guid)? ResolveMornUGUIButtonTargetInternal(string guid, HashSet<string> visited)
+        {
+            if (!visited.Add(guid))
+            {
+                return null;
+            }
+
+            var assetPath = AssetDatabase.GUIDToAssetPath(guid);
+            if (string.IsNullOrEmpty(assetPath))
+            {
+                return null;
+            }
+
+            var fullPath = Path.Combine(Directory.GetParent(Application.dataPath)!.FullName, assetPath);
+            if (!File.Exists(fullPath))
+            {
+                return null;
+            }
+
+            string content;
+            try
+            {
+                content = File.ReadAllText(fullPath);
+            }
+            catch
+            {
+                return null;
+            }
+
+            var lines = content.Split('\n');
+            // 非 stripped な MornUGUIButton コンポーネントを探す
+            for (var i = 0; i < lines.Length; i++)
+            {
+                if (!lines[i].StartsWith("--- !u!114 &") || lines[i].Contains("stripped"))
+                {
+                    continue;
+                }
+
+                var fileIdStart = "--- !u!114 &".Length;
+                var fileIdEnd = lines[i].Length;
+                for (var k = fileIdStart; k < lines[i].Length; k++)
+                {
+                    if (!char.IsDigit(lines[i][k]))
+                    {
+                        fileIdEnd = k;
+                        break;
+                    }
+                }
+
+                var fileId = lines[i].Substring(fileIdStart, fileIdEnd - fileIdStart);
+
+                // このブロック内で m_Script guid を確認
+                for (var j = i + 1; j < lines.Length; j++)
+                {
+                    if (lines[j].StartsWith("--- "))
+                    {
+                        break;
+                    }
+
+                    var trimmed = lines[j].TrimStart();
+                    if (trimmed.StartsWith("m_Script:") && trimmed.Contains($"guid: {MornUGUIButtonGuid}"))
+                    {
+                        return (fileId, guid);
+                    }
+                }
+            }
+
+            // 直接ない場合、Root PrefabInstance を探して再帰
+            // Root とは m_TransformParent が {fileID: 0} の PrefabInstance
+            for (var i = 0; i < lines.Length; i++)
+            {
+                if (!lines[i].StartsWith("--- !u!1001 &"))
+                {
+                    continue;
+                }
+
+                string sourceGuid = null;
+                var parentFileId = "?";
+                for (var j = i + 1; j < lines.Length; j++)
+                {
+                    if (lines[j].StartsWith("--- "))
+                    {
+                        break;
+                    }
+
+                    var trimmed = lines[j].TrimStart();
+                    if (trimmed.StartsWith("m_TransformParent:") && trimmed.Contains("fileID: "))
+                    {
+                        var fidStart = trimmed.IndexOf("fileID: ", StringComparison.Ordinal) + 8;
+                        var fidEnd = trimmed.IndexOf('}', fidStart);
+                        if (fidEnd > fidStart)
+                        {
+                            parentFileId = trimmed.Substring(fidStart, fidEnd - fidStart);
+                        }
+                    }
+
+                    if (trimmed.StartsWith("m_SourcePrefab:") && trimmed.Contains("guid: "))
+                    {
+                        var gidStart = trimmed.IndexOf("guid: ", StringComparison.Ordinal) + 6;
+                        var gidEnd = trimmed.IndexOf(',', gidStart);
+                        if (gidEnd > gidStart)
+                        {
+                            sourceGuid = trimmed.Substring(gidStart, gidEnd - gidStart);
+                        }
+                    }
+                }
+
+                if (parentFileId == "0" && !string.IsNullOrEmpty(sourceGuid))
+                {
+                    var nested = ResolveMornUGUIButtonTargetInternal(sourceGuid, visited);
+                    if (nested != null)
+                    {
+                        return nested;
+                    }
+                }
+            }
+
+            return null;
+        }
+
+        private void DrawStrippedOrphanSection(
+            ref bool foldout,
+            string title,
+            List<ScanResult> results)
+        {
+            var originalColor = GUI.backgroundColor;
+            GUI.backgroundColor = new Color(1f, 0.6f, 0.8f);
+            foldout = EditorGUILayout.Foldout(foldout, title, true, EditorStyles.foldoutHeader);
+            GUI.backgroundColor = originalColor;
+
+            if (!foldout)
+            {
+                return;
+            }
+
+            if (results.Count == 0)
+            {
+                EditorGUILayout.LabelField("  (なし)", EditorStyles.miniLabel);
+                return;
+            }
+
+            using (new EditorGUILayout.HorizontalScope())
+            {
+                if (GUILayout.Button($"全て修正 ({results.Count}件)", GUILayout.Height(22)))
+                {
+                    if (EditorUtility.DisplayDialog(
+                            "全ての Button stripped 孤立参照を修正",
+                            $"{results.Count} ファイル内の孤立参照を MornUGUIButton に差し替えます。\n\n実行前に git commit しておくことを推奨します。",
+                            "実行",
+                            "キャンセル"))
+                    {
+                        for (var i = results.Count - 1; i >= 0; i--)
+                        {
+                            if (FixStrippedOrphansSingle(results[i].AssetPath))
+                            {
+                                results.RemoveAt(i);
+                            }
+                        }
+                    }
+                }
+            }
+
+            EditorGUI.indentLevel++;
+            for (var i = results.Count - 1; i >= 0; i--)
+            {
+                var result = results[i];
+                using (new EditorGUILayout.HorizontalScope())
+                {
+                    if (GUILayout.Button(
+                            Path.GetFileName(result.AssetPath),
+                            EditorStyles.linkLabel,
+                            GUILayout.ExpandWidth(false)))
+                    {
+                        var obj = AssetDatabase.LoadAssetAtPath<UnityEngine.Object>(result.AssetPath);
+                        if (obj != null)
+                        {
+                            EditorGUIUtility.PingObject(obj);
+                            Selection.activeObject = obj;
+                        }
+                    }
+
+                    EditorGUILayout.LabelField(result.Details, EditorStyles.miniLabel);
+
+                    if (GUILayout.Button("修正", GUILayout.Width(40)))
+                    {
+                        if (FixStrippedOrphansSingle(result.AssetPath))
+                        {
+                            results.RemoveAt(i);
+                        }
+                    }
+                }
+            }
+
+            EditorGUI.indentLevel--;
+        }
+
+        /// <summary>
+        /// 指定ファイル内の Button stripped 孤立参照を MornUGUIButton に差し替える。
+        /// 解決できない孤立参照はそのまま残す。全部解決できた場合のみ true。
+        /// </summary>
+        private static bool FixStrippedOrphansSingle(string assetPath)
+        {
+            var fullPath = Path.Combine(
+                Directory.GetParent(Application.dataPath)!.FullName, assetPath);
+
+            try
+            {
+                var content = File.ReadAllText(fullPath);
+                var lines = content.Split('\n').ToList();
+                var orphans = ExtractStrippedButtonOrphans(content);
+                if (orphans.Count == 0)
+                {
+                    return true;
+                }
+
+                var modified = false;
+                var allResolved = true;
+                // 逆順処理: 行番号のズレを避ける
+                for (var idx = orphans.Count - 1; idx >= 0; idx--)
+                {
+                    var o = orphans[idx];
+                    var target = ResolveMornUGUIButtonTarget(o.SrcFileId, o.SrcGuid);
+                    if (target == null)
+                    {
+                        allResolved = false;
+                        Debug.LogWarning($"[Morn Migration] {assetPath}: stripped {o.StrippedFileId} の差し替え先が見つからず (src fileID={o.SrcFileId}, guid={o.SrcGuid})");
+                        continue;
+                    }
+
+                    // ブロック内の m_Script guid と m_CorrespondingSourceObject を書き換え
+                    for (var j = o.BlockStart; j <= o.BlockEnd && j < lines.Count; j++)
+                    {
+                        if (lines[j].Contains(UnityButtonGuid) && lines[j].TrimStart().StartsWith("m_Script:"))
+                        {
+                            lines[j] = lines[j].Replace(UnityButtonGuid, MornUGUIButtonGuid);
+                        }
+
+                        if (lines[j].TrimStart().StartsWith("m_CorrespondingSourceObject:"))
+                        {
+                            lines[j] = System.Text.RegularExpressions.Regex.Replace(
+                                lines[j],
+                                @"fileID: \d+, guid: [0-9a-f]{32}",
+                                $"fileID: {target.Value.fileId}, guid: {target.Value.guid}");
+                        }
+                    }
+
+                    modified = true;
+                    Debug.Log($"[Morn Migration] {assetPath}: stripped {o.StrippedFileId} → MornUGUIButton ({target.Value.fileId}, {target.Value.guid.Substring(0, 8)}...)");
+                }
+
+                if (modified)
+                {
+                    File.WriteAllText(fullPath, string.Join('\n', lines));
+                }
+
+                return allResolved;
+            }
+            catch (Exception e)
+            {
+                Debug.LogError($"[Morn Migration] {assetPath} の修正に失敗: {e.Message}");
+                return false;
             }
         }
 
