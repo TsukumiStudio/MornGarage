@@ -15,6 +15,7 @@ namespace MornLib
         public const string SubStateGuid = "aac67bf328824705a55354ac6d26608c";
         public const string LinkModuleGuid = "8be286109e114b849574ebd8390b6191";
         public const string WaitTimeStateGuid = "178f13c9c785bb341b8537958dc16138";
+        public const string MornSpreadSheetMasterGuid = "cdf9b985515a45678141d297530d5bfe";
 
         /// <summary>assetPath からフルパスを取得。</summary>
         public static string ToFullPath(string assetPath)

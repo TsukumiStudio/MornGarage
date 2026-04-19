@@ -27,6 +27,7 @@ namespace MornLib
             new CancelTargetMigrationStep(),
             new CsReplaceMigrationStep(),
             new MissingScriptMigrationStep(),
+            new SpreadSheetMasterApiUrlMigrationStep(),
         };
 
         private Vector2 _scrollPos;
