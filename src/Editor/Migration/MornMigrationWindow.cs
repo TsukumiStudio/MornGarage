@@ -18,6 +18,7 @@ namespace MornLib
         private readonly List<MornMigrationStep> _steps = new()
         {
             new GuidRemapMigrationStep(),
+            new FieldRenameMigrationStep(),
             new DeletedGuidMigrationStep(),
             new ControlStateFieldMigrationStep(),
             new SubStateFieldMigrationStep(),
