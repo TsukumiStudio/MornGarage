@@ -41,6 +41,10 @@ namespace MornLib
             try
             {
                 File.WriteAllText(ToFullPath(assetPath), content);
+                // Unity Editor 上で書き換え結果を即時反映するため Reimport をかける。
+                // これが無いと Inspector でスクリプト参照が None 表示のままキャッシュされ、
+                // 手動で Reimport / ドメインリロードを何度か実行しないと値が更新されない。
+                AssetDatabase.ImportAsset(assetPath, ImportAssetOptions.ForceUpdate);
                 return true;
             }
             catch (Exception e)

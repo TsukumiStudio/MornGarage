@@ -26,10 +26,7 @@ namespace MornLib
             // MornArbor Obsolete → 新型
             { "ac57e10a4fe04d3499fe699b2eeee5ea", ("aac67bf328824705a55354ac6d26608c", "ObsoleteSubState", "SubState") },
             { "394ac4c5f3df4673862c62fc0563a7fb", ("25ce3e5de7204deabd088884851df9a5", "ObsoletePlayAnimationProcess", "PlayAnimationProcess") },
-            // MornUGUI / MornLocalize Old → 新型
-            { "4e26e1a68b544d0f8fac57dfedc41450", ("3e5221d3bb1849d38d28458571bb2548", "MornUGUITextSetterOld", "MornUGUITextSetter") },
-            { "84cd7484039147119679b73d79fce3ef", ("e86d3b40ea8f44df9e0cde946ab6453e", "MornLocalizeFontOld", "MornLocalizeFont") },
-            { "1ef380cda7ff49ccbbbf023fb1f22e4a", ("e9bb9d729c14468aa470409b0dbc9ec8", "MornLocalizeButtonOld", "MornLocalizeButton") },
+            // MornUGUI / MornLocalize Old → 新型 は MornUGUILocalizeMigrationStep に移管 (GUID 置換 + フィールド名リネームを 1 ステップで実行)
         };
 
         public override void ScanFile(MornMigrationFile file, MornMigrationContext ctx)

@@ -18,7 +18,9 @@ namespace MornLib
         private readonly List<MornMigrationStep> _steps = new()
         {
             new GuidRemapMigrationStep(),
-            new FieldRenameMigrationStep(),
+            new MornUGUILocalizeMigrationStep(),
+            new MornBeatMigrationStep(),
+            new MornUGUITextSetterMaterialReportStep(),
             new DeletedGuidMigrationStep(),
             new ControlStateFieldMigrationStep(),
             new SubStateFieldMigrationStep(),
@@ -261,6 +263,8 @@ namespace MornLib
                                 "キャンセル"))
                         {
                             step.FixAll();
+                            AssetDatabase.SaveAssets();
+                            AssetDatabase.Refresh();
                         }
                     }
                 }
@@ -289,6 +293,8 @@ namespace MornLib
                             if (step.FixOne(result))
                             {
                                 step.Results.RemoveAt(i);
+                                AssetDatabase.SaveAssets();
+                                AssetDatabase.Refresh();
                             }
                         }
                     }
