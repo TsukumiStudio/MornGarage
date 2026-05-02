@@ -200,16 +200,95 @@ namespace MornLib
         /// </summary>
         private static bool NeedsParentPropagation(string content)
         {
-            // 以下のいずれかでも対象に拾う:
-            //   1. PrefabInstance がある & propertyPath: _sizeSettings/_fontSettings override がある
-            //   2. ファイル内に MornLocalizeButton が直接配置されていて _sizeSettings/_fontSettings が None
-            var hasPrefabInstanceCase = content.Contains("PrefabInstance:")
-                                        && (content.Contains("propertyPath: _sizeSettings")
-                                            || content.Contains("propertyPath: _fontSettings"));
-            var hasNoneFillCase = content.Contains($"guid: {LocalizeButtonNewGuid}")
-                                  && (content.Contains("_sizeSettings: {fileID: 0}")
-                                      || content.Contains("_fontSettings: {fileID: 0}"));
-            return hasPrefabInstanceCase || hasNoneFillCase;
+            // (1) ファイル内に MornLocalizeButton が直接配置されていて _sizeSettings/_fontSettings が None
+            if (content.Contains($"guid: {LocalizeButtonNewGuid}")
+                && (content.Contains("_sizeSettings: {fileID: 0}")
+                    || content.Contains("_fontSettings: {fileID: 0}")))
+            {
+                return true;
+            }
+
+            // (2) PrefabInstance ブロック単位に走査し、 TextSetter override があるが
+            //     LocalizeButton override が無い (= まだ親伝搬されていない) ものがあれば true
+            if (!content.Contains("PrefabInstance:"))
+            {
+                return false;
+            }
+
+            foreach (var block in SplitBlocks(content))
+            {
+                if (!IsPrefabInstanceBlock(block))
+                {
+                    continue;
+                }
+
+                if (BlockNeedsPropagation(block))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        /// <summary>1 つの PrefabInstance ブロックで TextSetter override 有り & LocalizeButton override 無しなら true。</summary>
+        private static bool BlockNeedsPropagation(string block)
+        {
+            var sourcePrefabGuid = ExtractSourcePrefabGuid(block);
+            if (sourcePrefabGuid == null)
+            {
+                return false;
+            }
+
+            var localizeButtonAnchor = ResolveLocalizeButtonAnchor(sourcePrefabGuid);
+            if (localizeButtonAnchor == null)
+            {
+                return false;
+            }
+
+            var textSetterAnchors = ResolveTextSetterAnchors(sourcePrefabGuid);
+            if (textSetterAnchors.Count == 0)
+            {
+                return false;
+            }
+
+            foreach (var (_, privateName, _, propagate) in PrefabInstanceDuplicates)
+            {
+                if (!propagate)
+                {
+                    continue;
+                }
+
+                var hasOnTextSetter = false;
+                foreach (var setterAnchor in textSetterAnchors)
+                {
+                    if (BlockHasOverride(block, setterAnchor, privateName))
+                    {
+                        hasOnTextSetter = true;
+                        break;
+                    }
+                }
+
+                if (!hasOnTextSetter)
+                {
+                    continue;
+                }
+
+                if (!BlockHasOverride(block, localizeButtonAnchor, privateName))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private static bool BlockHasOverride(string block, string anchor, string propertyName)
+        {
+            var pattern = @"target: \{fileID: " + Regex.Escape(anchor)
+                                                + @"[^}]+\}\r?\n      propertyPath: "
+                                                + Regex.Escape(propertyName) + @"\r?\n";
+            return Regex.IsMatch(block, pattern);
         }
 
         private static bool ContentContainsField(string content, string fieldName)

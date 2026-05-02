@@ -1,14 +1,17 @@
 #if UNITY_EDITOR
 using System.Collections.Generic;
 using System.Text.RegularExpressions;
+using UnityEditor;
 using UnityEngine;
 
 namespace MornLib
 {
     /// <summary>
     /// MornBeat 系のフィールド名移行。
-    /// - BeatPlayState._beatMemo → _music (旧 MornBeatMemo → 新 MornBeatMusic)
-    /// MonoBehaviour ブロック内のフィールド名と PrefabInstance の propertyPath の両方を置換する。
+    /// - BeatPlayState._beatMemo → _music
+    /// - MornNovelStartCommand._beatMemo → _beatMusic
+    /// MonoBehaviour ブロックは m_Script の Script GUID で分岐し、 PrefabInstance ブロックは
+    /// modification の target anchor から SourcePrefab を経由で Script GUID を逆引きして個別に rename する。
     /// </summary>
     internal sealed class MornBeatMigrationStep : MornMigrationStep
     {
@@ -16,11 +19,13 @@ namespace MornLib
         public override Color HeaderColor => new(0.6f, 1f, 0.6f);
 
         private const string BeatPlayStateGuid = "9617cf301b04ecd47bb46e35d2acc61e";
+        private const string MornNovelStartCommandGuid = "e5a59e1bceb94fe4ca21f8ffca1e0678";
 
-        /// <summary>BeatPlayState 等のフィールド名リネーム (旧 → 新)</summary>
+        /// <summary>各 Script ごとのフィールド名リネーム (旧 → 新)</summary>
         private static readonly Dictionary<string, (string Old, string New)[]> FieldRenames = new()
         {
             { BeatPlayStateGuid, new[] { ("_beatMemo", "_music") } },
+            { MornNovelStartCommandGuid, new[] { ("_beatMemo", "_beatMusic") } },
         };
 
         public override void ScanFile(MornMigrationFile file, MornMigrationContext ctx)
@@ -31,14 +36,61 @@ namespace MornLib
             }
 
             var hits = new List<string>();
+
+            // (1) MonoBehaviour ブロックで対象 Script GUID + 旧フィールド名が残っていれば対象
+            var blocks = SplitBlocks(file.Content);
             foreach (var kvp in FieldRenames)
             {
-                foreach (var (oldName, newName) in kvp.Value)
+                foreach (var block in blocks)
                 {
-                    if (ContentContainsField(file.Content, oldName)
-                        || ContentContainsPropertyPath(file.Content, oldName))
+                    if (!ContainsScriptGuid(block, kvp.Key))
                     {
-                        hits.Add($"{oldName} → {newName}");
+                        continue;
+                    }
+
+                    foreach (var (oldName, newName) in kvp.Value)
+                    {
+                        if (BlockContainsField(block, oldName))
+                        {
+                            hits.Add($"{oldName} → {newName}");
+                            break;
+                        }
+                    }
+                }
+            }
+
+            // (2) PrefabInstance ブロックで target=対象 Script の anchor で旧フィールド名が残っていれば対象
+            foreach (var block in blocks)
+            {
+                if (!IsPrefabInstanceBlock(block))
+                {
+                    continue;
+                }
+
+                var sourcePrefabGuid = ExtractSourcePrefabGuid(block);
+                if (sourcePrefabGuid == null)
+                {
+                    continue;
+                }
+
+                var anchorToScriptGuid = ResolveAnchorToScriptGuid(sourcePrefabGuid);
+                foreach (var kvp in FieldRenames)
+                {
+                    foreach (var (anchor, scriptGuid) in anchorToScriptGuid)
+                    {
+                        if (scriptGuid != kvp.Key)
+                        {
+                            continue;
+                        }
+
+                        foreach (var (oldName, newName) in kvp.Value)
+                        {
+                            if (BlockHasOverride(block, anchor, oldName))
+                            {
+                                hits.Add($"{oldName} → {newName}");
+                                break;
+                            }
+                        }
                     }
                 }
             }
@@ -69,24 +121,38 @@ namespace MornLib
             {
                 var rewritten = blocks[i];
 
+                // (1) MonoBehaviour ブロックで Script GUID 一致の場合のみフィールド名置換
                 foreach (var kvp in FieldRenames)
                 {
-                    if (ContainsScriptGuid(rewritten, kvp.Key))
+                    if (!ContainsScriptGuid(rewritten, kvp.Key))
                     {
-                        foreach (var (oldName, newName) in kvp.Value)
-                        {
-                            rewritten = ReplaceFieldName(rewritten, oldName, newName);
-                        }
+                        continue;
+                    }
+
+                    foreach (var (oldName, newName) in kvp.Value)
+                    {
+                        rewritten = ReplaceFieldName(rewritten, oldName, newName);
                     }
                 }
 
+                // (2) PrefabInstance ブロックで target anchor → Script GUID を解決して個別置換
                 if (IsPrefabInstanceBlock(rewritten))
                 {
-                    foreach (var kvp in FieldRenames)
+                    var sourcePrefabGuid = ExtractSourcePrefabGuid(rewritten);
+                    if (sourcePrefabGuid != null)
                     {
-                        foreach (var (oldName, newName) in kvp.Value)
+                        var anchorToScriptGuid = ResolveAnchorToScriptGuid(sourcePrefabGuid);
+                        foreach (var (anchor, scriptGuid) in anchorToScriptGuid)
                         {
-                            rewritten = ReplacePropertyPath(rewritten, oldName, newName);
+                            if (!FieldRenames.TryGetValue(scriptGuid, out var renames))
+                            {
+                                continue;
+                            }
+
+                            foreach (var (oldName, newName) in renames)
+                            {
+                                rewritten = ReplacePropertyPathForAnchor(rewritten, anchor, oldName, newName);
+                            }
                         }
                     }
                 }
@@ -112,19 +178,79 @@ namespace MornLib
             return true;
         }
 
-        private static bool ContentContainsField(string content, string fieldName)
+        /// <summary>指定 prefab guid の YAML を読み、 anchor → m_Script の guid マップを構築。</summary>
+        private static Dictionary<string, string> ResolveAnchorToScriptGuid(string prefabGuid)
         {
-            return content.Contains($"\n  {fieldName}:");
+            var result = new Dictionary<string, string>();
+            var path = AssetDatabase.GUIDToAssetPath(prefabGuid);
+            if (string.IsNullOrEmpty(path))
+            {
+                return result;
+            }
+
+            var content = MornMigrationUtil.SafeRead(path);
+            if (content == null)
+            {
+                return result;
+            }
+
+            string currentAnchor = null;
+            foreach (var line in content.Split('\n'))
+            {
+                if (line.StartsWith("--- "))
+                {
+                    var anchorMatch = Regex.Match(line, @"&(\d+)");
+                    currentAnchor = anchorMatch.Success ? anchorMatch.Groups[1].Value : null;
+                    continue;
+                }
+
+                if (currentAnchor == null)
+                {
+                    continue;
+                }
+
+                var guidMatch = Regex.Match(line, @"m_Script: \{fileID: \d+, guid: ([0-9a-f]+),");
+                if (guidMatch.Success)
+                {
+                    result[currentAnchor] = guidMatch.Groups[1].Value;
+                    currentAnchor = null;
+                }
+            }
+
+            return result;
         }
 
-        private static bool ContentContainsPropertyPath(string content, string fieldName)
+        private static string ExtractSourcePrefabGuid(string block)
         {
-            return content.Contains($"propertyPath: {fieldName}\n") || content.Contains($"propertyPath: {fieldName}.");
+            var match = Regex.Match(block, @"m_SourcePrefab: \{fileID: \d+, guid: ([0-9a-f]+),");
+            return match.Success ? match.Groups[1].Value : null;
+        }
+
+        private static bool BlockHasOverride(string block, string anchor, string propertyName)
+        {
+            var pattern = @"target: \{fileID: " + Regex.Escape(anchor)
+                                                + @"[^}]+\}\r?\n      propertyPath: "
+                                                + Regex.Escape(propertyName) + @"(\.|\r?\n)";
+            return Regex.IsMatch(block, pattern);
+        }
+
+        private static string ReplacePropertyPathForAnchor(string block, string anchor, string oldName, string newName)
+        {
+            var pattern = @"(    - target: \{fileID: " + Regex.Escape(anchor)
+                                                       + @", guid: [^}]+\}\r?\n      propertyPath: )"
+                                                       + Regex.Escape(oldName)
+                                                       + @"((?:\.[^\r\n]+)?\r?\n)";
+            return Regex.Replace(block, pattern, m => m.Groups[1].Value + newName + m.Groups[2].Value);
         }
 
         private static bool ContainsScriptGuid(string block, string guid)
         {
             return block.Contains($"guid: {guid}");
+        }
+
+        private static bool BlockContainsField(string block, string fieldName)
+        {
+            return block.Contains($"\n  {fieldName}:");
         }
 
         private static bool IsPrefabInstanceBlock(string block)
@@ -135,13 +261,6 @@ namespace MornLib
         private static string ReplaceFieldName(string block, string oldName, string newName)
         {
             return block.Replace($"\n  {oldName}:", $"\n  {newName}:");
-        }
-
-        private static string ReplacePropertyPath(string block, string oldName, string newName)
-        {
-            block = block.Replace($"propertyPath: {oldName}\n", $"propertyPath: {newName}\n");
-            block = block.Replace($"propertyPath: {oldName}.", $"propertyPath: {newName}.");
-            return block;
         }
 
         private static string[] SplitBlocks(string content)
