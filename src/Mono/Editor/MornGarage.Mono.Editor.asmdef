@@ -1,0 +1,26 @@
+{
+    "name": "MornGarage.Mono.Editor",
+    "rootNamespace": "MornLib",
+    "references": [
+        "GUID:4343856e0aa7f4c1a5b7b842f021f01e",
+        "Unity.TextMeshPro",
+        "Unity.TextMeshPro.Editor"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [
+        {
+            "name": "com.unity.textmeshpro",
+            "expression": "",
+            "define": "USE_TEXTMESHPRO"
+        }
+    ],
+    "noEngineReferences": false
+}
