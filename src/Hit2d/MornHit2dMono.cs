@@ -4,7 +4,9 @@ namespace MornLib.Hit2d
 {
     public abstract class MornHit2dMono : MonoBehaviour
     {
+#pragma warning disable CS0414
         private bool _drawGizmoFlag;
+#pragma warning restore CS0414
 #if UNITY_EDITOR
         private void OnDrawGizmos()
         {
